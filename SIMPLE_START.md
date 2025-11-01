@@ -358,6 +358,13 @@ def __init__(self, config: Wav2Vec2Config):
   - Generation: ~1 minute 46 seconds (4 steps × ~26s/step)
   - Video: 3.24s, 461.3 kbps, 184KB
 
+- **Lightx2v LoRA + TeaCache (4 steps)**: **3 minutes 47 seconds** (~10x speedup)
+  - Model loading: ~2 minutes
+  - LoRA loading: ~10 seconds
+  - Generation: ~1 minute 13 seconds (4 optimized steps)
+  - Video: 3.24s, 461.3 kbps, 180KB
+  - **Note**: TeaCache provides minimal additional benefit with low step counts
+
 - **TeaCache + APG (40 steps)**: ~8-12 minutes estimated (2-3x speedup)
 - **FusionX LoRA (8 steps)**: ~5-7 minutes estimated (5x speedup)
 
