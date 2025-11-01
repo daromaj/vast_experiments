@@ -119,6 +119,9 @@ uv pip install packaging
 uv pip install wheel
 # Note: flash_attn requires --no-build-isolation to access torch during build
 uv pip install --no-build-isolation flash_attn==2.7.4.post1
+
+# Install protobuf (required for CLIP tokenizer)
+uv pip install protobuf
 ```
 
 ### 4. Install Python Dependencies
