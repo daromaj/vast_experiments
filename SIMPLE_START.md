@@ -35,6 +35,53 @@ Based on the template documentation, this Docker image comes with:
 ✅ **Virtual Environment** - `/venv/main/` auto-activates correctly
 ✅ **GPU Access** - NVIDIA GPUs detected and accessible
 
+## Vast.ai Instance Rental & Setup
+
+### Renting an H100 Instance on Vast.ai
+
+1. **Search for available H100 instances:**
+   ```bash
+   uv run ./scripts/search_vastai_h100.py
+   ```
+   This will show available H100 instances sorted by estimated total cost, including minimum bid prices.
+
+2. **Find the cheapest H100 instance:**
+   - Look for instances with the lowest "Est$/h" (estimated hourly cost)
+   - Check the "Base$/h" and minimum bid requirements
+   - Note the instance ID from the first column
+
+3. **Create interruptible instance with minimum bid:**
+   ```bash
+   vastai create instance <INSTANCE_ID> --image vastai/pytorch:2.4.1-cuda-12.4.1-py310-22.04 --disk 160 --bid
+   ```
+   - Replace `<INSTANCE_ID>` with the ID from step 2
+   - `--bid` creates an interruptible instance (minimum cost)
+   - `--disk 160` allocates 160GB container storage
+   - The system will use the host's minimum bid price automatically
+
+4. **Wait for instance to become available:**
+   - Check status: `vastai show machines`
+   - Instance may take a few minutes to start
+   - Interruptible instances run when your bid is highest
+
+5. **Get SSH connection details:**
+   - **Web Interface (Recommended):** Go to vast.ai dashboard → Instances → Click "SSH" button on your instance card
+   - **CLI Alternative:** `vastai show instance <INSTANCE_ID>` for basic info
+   - Copy the provided SSH command (includes IP, port, username, and key path)
+
+6. **Connect via SSH:**
+   ```bash
+   ssh -i /path/to/your/private_key root@IP_ADDRESS -p PORT
+   ```
+   Use the command provided by the SSH button in the web interface.
+
+### Important Notes for Vast.ai Instances:
+- **Interruptible instances** can be paused if someone bids higher
+- **Only pay for actual runtime** (billed by the second)
+- **Storage costs continue** even when instance is paused
+- **Minimum bid** is set by the host - you cannot bid below this
+- **160GB disk space** is allocated and cannot be changed later
+
 ## Docker Setup Steps
 
 **Important:** All Python/pip commands should be run after the virtual environment activates automatically. If needed manually: `source /venv/main/bin/activate`
