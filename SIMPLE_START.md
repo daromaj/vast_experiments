@@ -283,6 +283,32 @@ python generate_infinitetalk.py \
     --save_file test_output_lightx2v
 ```
 
+#### Option C+: Lightx2v LoRA + TeaCache + APG (Ultimate Speed, ~12-15x speedup)
+```bash
+# Combine LoRA distillation with sampling optimizations
+python generate_infinitetalk.py \
+    --ckpt_dir weights/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir 'weights/chinese-wav2vec2-base' \
+    --infinitetalk_dir weights/InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir weights/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors \
+    --lora_scale 1.0 \
+    --input_json examples/single_example_image.json \
+    --size infinitetalk-480 \
+    --sample_steps 4 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_shift 2 \
+    --mode clip \
+    --motion_frame 9 \
+    --num_persistent_param_in_dit 0 \
+    --use_teacache \
+    --teacache_thresh 0.2 \
+    --use_apg \
+    --apg_momentum -0.75 \
+    --apg_norm_threshold 55 \
+    --save_file test_output_ultimate_speed
+```
+
 #### Option D: Multi-GPU (if you have multiple GPUs)
 ```bash
 # For 2 GPUs (adjust GPU_NUM as needed)
