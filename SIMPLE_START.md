@@ -154,40 +154,23 @@ mkdir -p weights/InfiniteTalk/multi
 python -c "import huggingface_hub; print('huggingface_hub available')" || uv pip install huggingface_hub[cli]
 
 # Download models (this will take significant time and bandwidth)
-# OPTIMIZATION: Only download essential files, not entire repositories!
+# LESSON LEARNED: Only InfiniteTalk download can be optimized!
+# Download entire Wan2.1-I2V-14B-480P repo (includes all tokenizers and configs)
+# Download entire chinese-wav2vec2-base repo (needed for tokenizer/config)
+# OPTIMIZE: Only download specific InfiniteTalk model file
 
-# Wan2.1-I2V-14B-480P: Only these essential files needed (~81GB total):
-hf download Wan-AI/Wan2.1-I2V-14B-480P config.json --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P Wan2.1_VAE.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P models_t5_umt5-xxl-enc-bf16.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model.safetensors.index.json --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00001-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00002-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00003-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00004-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00005-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00006-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
-hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00007-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+# Wan2.1-I2V-14B-480P: Download entire repository (~150GB+)
+# This includes all tokenizers, configs, and model files in correct structure
+hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir ./weights/Wan2.1-I2V-14B-480P
 
-# Tokenizer files for T5 and CLIP models:
-hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/special_tokens_map.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
-hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/spiece.model --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
-hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/tokenizer.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
-hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/tokenizer_config.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
-hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/sentencepiece.bpe.model --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
-hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/special_tokens_map.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
-hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/tokenizer.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
-hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/tokenizer_config.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
-
-# chinese-wav2vec2-base: Full repo needed for tokenizer/config
+# chinese-wav2vec2-base: Download entire repository (needed for tokenizer/config)
 hf download TencentGameMate/chinese-wav2vec2-base --local-dir ./weights/chinese-wav2vec2-base
 hf download TencentGameMate/chinese-wav2vec2-base model.safetensors --revision refs/pr/1 --local-dir ./weights/chinese-wav2vec2-base
 
-# IMPORTANT: From InfiniteTalk repo, we only need this single file (not the entire repo):
+# OPTIMIZATION: From InfiniteTalk repo, we only need this single file (not the entire ~24GB repo):
 hf download MeiGen-AI/InfiniteTalk single/infinitetalk.safetensors --local-dir ./weights/InfiniteTalk
 
-# Legacy fallback (deprecated but still works):
+# Legacy individual file downloads (deprecated - use repo downloads above):
 # huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P --local-dir ./weights/Wan2.1-I2V-14B-480P
 # huggingface-cli download TencentGameMate/chinese-wav2vec2-base --local-dir ./weights/chinese-wav2vec2-base
 # huggingface-cli download TencentGameMate/chinese-wav2vec2-base model.safetensors --revision refs/pr/1 --local-dir ./weights/chinese-wav2vec2-base
