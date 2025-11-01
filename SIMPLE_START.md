@@ -215,6 +215,93 @@ python generate_infinitetalk.py \
     --save_file test_output
 ```
 
+### 10. Accelerated Generation Options (Recommended for Speed)
+
+#### Option A: TeaCache + APG (Fastest, ~2-3x speedup)
+```bash
+python generate_infinitetalk.py \
+    --ckpt_dir weights/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir 'weights/chinese-wav2vec2-base' \
+    --infinitetalk_dir weights/InfiniteTalk/single/infinitetalk.safetensors \
+    --input_json examples/single_example_image.json \
+    --size infinitetalk-480 \
+    --sample_steps 40 \
+    --mode clip \
+    --motion_frame 9 \
+    --num_persistent_param_in_dit 0 \
+    --use_teacache \
+    --teacache_thresh 0.2 \
+    --use_apg \
+    --apg_momentum -0.75 \
+    --apg_norm_threshold 55 \
+    --save_file test_output_teacache_apg
+```
+
+#### Option B: FusionX LoRA (8 steps instead of 40, ~5x speedup)
+```bash
+# First download FusionX LoRA (if not available):
+hf download vrgamedevgirl84/Wan14BT2VFusioniX FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors --local-dir ./weights
+
+python generate_infinitetalk.py \
+    --ckpt_dir weights/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir 'weights/chinese-wav2vec2-base' \
+    --infinitetalk_dir weights/InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir weights/Wan2.1_I2V_14B_FusionX_LoRA.safetensors \
+    --lora_scale 1.0 \
+    --input_json examples/single_example_image.json \
+    --size infinitetalk-480 \
+    --sample_steps 8 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_shift 2 \
+    --mode clip \
+    --motion_frame 9 \
+    --num_persistent_param_in_dit 0 \
+    --save_file test_output_fusionx
+```
+
+#### Option C: Lightx2v LoRA (4 steps instead of 40, ~10x speedup)
+```bash
+# First download Lightx2v LoRA (if not available):
+hf download Kijai/WanVideo_comfy Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors --local-dir ./weights
+
+python generate_infinitetalk.py \
+    --ckpt_dir weights/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir 'weights/chinese-wav2vec2-base' \
+    --infinitetalk_dir weights/InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir weights/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors \
+    --lora_scale 1.0 \
+    --input_json examples/single_example_image.json \
+    --size infinitetalk-480 \
+    --sample_steps 4 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_shift 2 \
+    --mode clip \
+    --motion_frame 9 \
+    --num_persistent_param_in_dit 0 \
+    --save_file test_output_lightx2v
+```
+
+#### Option D: Multi-GPU (if you have multiple GPUs)
+```bash
+# For 2 GPUs (adjust GPU_NUM as needed)
+GPU_NUM=2
+torchrun --nproc_per_node=$GPU_NUM --standalone generate_infinitetalk.py \
+    --ckpt_dir weights/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir 'weights/chinese-wav2vec2-base' \
+    --infinitetalk_dir weights/InfiniteTalk/single/infinitetalk.safetensors \
+    --dit_fsdp --t5_fsdp \
+    --ulysses_size=$GPU_NUM \
+    --input_json examples/single_example_image.json \
+    --size infinitetalk-480 \
+    --sample_steps 40 \
+    --mode clip \
+    --motion_frame 9 \
+    --num_persistent_param_in_dit 0 \
+    --save_file test_output_multigpu
+```
+
 **IMPORTANT NOTE:** If you encounter the error `ValueError: The output_attentions attribute is not supported when using the attn_implementation set to sdpa`, you need to modify `src/audio_analysis/wav2vec2.py` to force eager attention implementation:
 
 ```python
