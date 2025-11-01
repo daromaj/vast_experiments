@@ -181,7 +181,7 @@ python generate_infinitetalk.py \
 - [x] Confirm FFmpeg installation works (pre-installed in vastai/pytorch image, version 4.4.2 - NOTE: quite old but functional)
 - [x] Create weights directory structure (created Wan2.1-I2V-14B-480P, chinese-wav2vec2-base, InfiniteTalk directories)
 - [ ] Test model downloads (in progress - downloading Wan2.1-I2V-14B-480P model)
-- [ ] Validate import tests pass
+- [x] Validate import tests pass (torch, torchvision, torchaudio, transformers, librosa, soundfile, wan, Wav2Vec2Model all imported successfully)
 - [ ] Run successful generation test
 
 ## Notes for vast.ai Replication
