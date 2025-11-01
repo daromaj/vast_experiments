@@ -229,6 +229,7 @@ python generate_infinitetalk.py \
 - [x] Create weights directory structure (created Wan2.1-I2V-14B-480P, chinese-wav2vec2-base, InfiniteTalk directories)
 - [ ] Test model downloads (in progress - downloading Wan2.1-I2V-14B-480P model)
 - [x] Validate import tests pass (torch, torchvision, torchaudio, transformers, librosa, soundfile, wan, Wav2Vec2Model all imported successfully)
+- [x] Validate import tests pass on vast.ai H100 instance (same imports successful on rented instance)
 - [ ] Run successful generation test
 
 ## Notes for vast.ai Replication
