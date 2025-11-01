@@ -1,20 +1,6 @@
 # InfiniteTalk Docker Setup Plan
 
-This document outlines the step-by-step process for setting up InfiniteTalk in a Docker environment using the `vastai/pytorch:2.4.1-cuda-12.4.1-py310-22.04` image. The goal is to create a reliable setup that can be replicated on vast.ai.
-
-## Important Note
-We're going to test these steps one by one in the Docker container to verify:
-- What's already pre-installed in the vastai/pytorch image
-- If we need additional steps or can skip some
-- Any dependency conflicts or missing packages
-- Performance and compatibility
-
-## Local Testing Setup
-**Running vastai/pytorch image locally for testing:**
-- Using `docker run --network host --gpus all` for optimal performance
-- Volume mounted to preserve downloaded models between container restarts
-- Testing complete setup locally before deploying to vast.ai infrastructure
-- Container ID: `b834478b9deb3068e22486b5f92328ef052335828be1ff14d3067e55093d4880`
+This document outlines the step-by-step process for setting up InfiniteTalk in a vast ai environment using the `vastai/pytorch:2.4.1-cuda-12.4.1-py310-22.04` image.
 
 ## Key Findings from vast.ai Template Readme
 Based on the template documentation, this Docker image comes with:
@@ -233,26 +219,10 @@ python generate_infinitetalk.py \
     --save_file test_output
 ```
 
-## Expected Outcomes After Testing
-
-- [x] Verify Python 3.10.x is available (should be pre-installed)
-- [x] Confirm PyTorch 2.4.1 with CUDA 12.4.1 support (should be pre-installed)
-- [x] Confirm virtual environment `/venv/main/` auto-activates
-- [x] Verify uv package manager is available (should be pre-installed)
-- [x] Check if xformers needs installation or is pre-installed (installed xformers==0.0.28 successfully)
-- [x] Test flash-attn installation compatibility (installed flash_attn==2.7.4.post1 with --no-build-isolation)
-- [x] Verify all pip packages install without conflicts using uv (installed 80 packages from requirements.txt successfully)
-- [x] Confirm FFmpeg installation works (pre-installed in vastai/pytorch image, version 4.4.2 - NOTE: quite old but functional)
-- [x] Create weights directory structure (created Wan2.1-I2V-14B-480P, chinese-wav2vec2-base, InfiniteTalk directories)
-- [ ] Test model downloads (in progress - downloading Wan2.1-I2V-14B-480P model)
-- [x] Validate import tests pass (torch, torchvision, torchaudio, transformers, librosa, soundfile, wan, Wav2Vec2Model all imported successfully)
-- [x] Validate import tests pass on vast.ai H100 instance (same imports successful on rented instance)
-- [ ] Run successful generation test
-
 ## Notes for vast.ai Replication
 
 1. **GPU Requirements**: Model requires significant VRAM (14B parameters)
-2. **Storage**: ~50GB+ for model weights
+2. **Storage**: ~160GB+ for model weights
 3. **Network**: Fast internet for model downloads
 4. **Time**: Initial setup may take 1-2 hours
 
