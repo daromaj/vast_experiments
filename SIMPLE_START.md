@@ -167,6 +167,16 @@ hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00005-of-00007.sa
 hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00006-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
 hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00007-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
 
+# Tokenizer files for T5 and CLIP models:
+hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/special_tokens_map.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
+hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/spiece.model --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
+hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/tokenizer.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
+hf download Wan-AI/Wan2.1-I2V-14B-480P google/umt5-xxl/tokenizer_config.json --local-dir ./weights/Wan2.1-I2V-14B-480P/google/umt5-xxl
+hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/sentencepiece.bpe.model --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
+hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/special_tokens_map.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
+hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/tokenizer.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
+hf download Wan-AI/Wan2.1-I2V-14B-480P xlm-roberta-large/tokenizer_config.json --local-dir ./weights/Wan2.1-I2V-14B-480P/xlm-roberta-large
+
 # chinese-wav2vec2-base: Full repo needed for tokenizer/config
 hf download TencentGameMate/chinese-wav2vec2-base --local-dir ./weights/chinese-wav2vec2-base
 hf download TencentGameMate/chinese-wav2vec2-base model.safetensors --revision refs/pr/1 --local-dir ./weights/chinese-wav2vec2-base
