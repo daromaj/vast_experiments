@@ -165,8 +165,23 @@ mkdir -p weights/InfiniteTalk/multi
 python -c "import huggingface_hub; print('huggingface_hub available')" || uv pip install huggingface_hub[cli]
 
 # Download models (this will take significant time and bandwidth)
-# Modern approach (recommended):
-hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir ./weights/Wan2.1-I2V-14B-480P
+# OPTIMIZATION: Only download essential files, not entire repositories!
+
+# Wan2.1-I2V-14B-480P: Only these essential files needed (~81GB total):
+hf download Wan-AI/Wan2.1-I2V-14B-480P config.json --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P Wan2.1_VAE.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P models_t5_umt5-xxl-enc-bf16.pth --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model.safetensors.index.json --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00001-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00002-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00003-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00004-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00005-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00006-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-480P diffusion_pytorch_model-00007-of-00007.safetensors --local-dir ./weights/Wan2.1-I2V-14B-480P
+
+# chinese-wav2vec2-base: Full repo needed for tokenizer/config
 hf download TencentGameMate/chinese-wav2vec2-base --local-dir ./weights/chinese-wav2vec2-base
 hf download TencentGameMate/chinese-wav2vec2-base model.safetensors --revision refs/pr/1 --local-dir ./weights/chinese-wav2vec2-base
 
