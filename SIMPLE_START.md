@@ -318,6 +318,23 @@ def __init__(self, config: Wav2Vec2Config):
 3. **Network**: Fast internet for model downloads
 4. **Time**: Initial setup may take 1-2 hours
 
+## Performance Benchmarks (10-second audio, 480p)
+
+### Baseline Performance:
+- **Default 40-step generation**: ~28 minutes 31 seconds total
+  - Model loading: ~2 minutes
+  - Generation: ~26 minutes (40 steps × ~39s/step)
+  - Video: 3.24s, 424.8 kbps, 166KB
+
+### Optimized Performance:
+- **Lightx2v LoRA (4 steps)**: **3 minutes 46 seconds** (~10x speedup)
+  - Model loading: ~2 minutes
+  - Generation: ~1 minute 46 seconds (4 steps × ~26s/step)
+  - Video: 3.24s, 461.3 kbps, 184KB
+
+- **TeaCache + APG (40 steps)**: ~8-12 minutes estimated (2-3x speedup)
+- **FusionX LoRA (8 steps)**: ~5-7 minutes estimated (5x speedup)
+
 ## Testing Checklist
 
 As we execute each step, we'll document:
