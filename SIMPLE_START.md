@@ -215,6 +215,15 @@ python generate_infinitetalk.py \
     --save_file test_output
 ```
 
+**IMPORTANT NOTE:** If you encounter the error `ValueError: The output_attentions attribute is not supported when using the attn_implementation set to sdpa`, you need to modify `src/audio_analysis/wav2vec2.py` to force eager attention implementation:
+
+```python
+def __init__(self, config: Wav2Vec2Config):
+    # Force eager attention implementation to support output_attentions
+    config._attn_implementation = "eager"
+    super().__init__(config)
+```
+
 ## Notes for vast.ai Replication
 
 1. **GPU Requirements**: Model requires significant VRAM (14B parameters)
