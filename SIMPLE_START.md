@@ -2,6 +2,9 @@
 
 This document outlines the step-by-step process for setting up InfiniteTalk in a vast ai environment using the `vastai/pytorch:2.4.1-cuda-12.4.1-py310-22.04` image.
 
+TODO: test tensorrt
+60s in 60 minutes :( with shitty lora :(
+
 ## Key Findings from vast.ai Template Readme
 Based on the template documentation, this Docker image comes with:
 - **PyTorch pre-installed** in `/venv/main/` virtual environment (auto-activates)
@@ -370,6 +373,14 @@ def __init__(self, config: Wav2Vec2Config):
   - Generation: ~18 minutes (40 steps × ~27s/step)
   - Video: 3.24s, 462.8 kbps, 181KB
 - **FusionX LoRA (8 steps)**: ~5-7 minutes estimated (5x speedup)
+
+### Streaming Mode Performance (58-second audio):
+- **Lightx2v LoRA Streaming (4 steps)**: **~55 minutes total** (~1:1 audio:time ratio)
+  - Model loading: ~2 minutes
+  - LoRA loading: ~10 seconds
+  - Generation: ~53 minutes (very slow for long-form content)
+  - Video: 40s, 703.5 kbps, 3.4MB
+  - **Issue**: LoRA performs poorly on long-form content - needs better optimization
 
 ## Testing Checklist
 
