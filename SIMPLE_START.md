@@ -380,7 +380,13 @@ def __init__(self, config: Wav2Vec2Config):
   - LoRA loading: ~10 seconds
   - Generation: ~53 minutes (very slow for long-form content)
   - Video: 40s, 703.5 kbps, 3.4MB
-  - **Issue**: LoRA performs poorly on long-form content - needs better optimization
+
+- **Lightx2v LoRA + TeaCache Streaming (4 steps)**: **~55 minutes total** (~1:1 audio:time ratio)
+  - Model loading: ~2 minutes
+  - LoRA loading: ~10 seconds
+  - Generation: ~53 minutes (same as LoRA-only)
+  - Video: 40s, 703.5 kbps, 3.4MB
+  - **Issue**: TeaCache provides no benefit with LoRA on long-form content
 
 ## Testing Checklist
 
