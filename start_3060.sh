@@ -7,7 +7,7 @@ source /venv/main/bin/activate
 
 # 2. Install SageAttention (Critical for 3090 speed)
 # As of Dec 2025, this installs the stable version compatible with Ampere cards
-uv pip install sageattention
+pip install sageattention --no-build-isolation
 
 # Navigate to ComfyUI custom nodes directory
 cd /workspace/ComfyUI/custom_nodes
