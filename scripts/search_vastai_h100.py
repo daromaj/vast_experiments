@@ -5,6 +5,8 @@ Script to search vast.ai offers focusing on NVIDIA H100/H200 GPUs.
 Prerequisite: activate the project virtual environment first, e.g.::
 
     source .venv/bin/activate
+    OR use
+    uv run ./scripts/search_vastai_h100.py
 
 The script queries both on-demand and interruptible offers, filters down to
 H100/H200 accelerators, calculates an estimated hourly cost (base rental,
