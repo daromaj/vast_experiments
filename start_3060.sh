@@ -1,46 +1,51 @@
+#!/bin/bash
+
 echo "Starting Provisioning for RTX 3090..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get install -y ffmpeg git aria2 nano libsox-fmt-all
 
 # 1. Activate Environment
-source /venv/main/bin/activate
+if command -v python3 >/dev/null 2>&1 && [ -f /venv/main/bin/activate ]; then
+    . /venv/main/bin/activate
+else
+    echo "Virtual environment not found or not available. Using system Python."
+fi
 
 # 2. Install SageAttention (Critical for 3090 speed)
 # As of Dec 2025, this installs the stable version compatible with Ampere cards
 if ! pip show sageattention > /dev/null 2>&1; then
-    pip install sageattention --no-build-isolation
+    pip install sageattention --no-build-isolation --break-system-packages 2>/dev/null || echo "Failed to install SageAttention via pip."
 else
     echo "SageAttention is already installed, skipping installation."
 fi
 
 # Navigate to ComfyUI custom nodes directory
+# mkdir -p /workspace/ComfyUI/custom_nodes
 cd /workspace/ComfyUI/custom_nodes
 
 # Install from Git repositories
-# ComfyUI Manager
-# git clone https://github.com/ltdrdata/ComfyUI-Manager.git
-
 
 # Kijai's Wrapper (Handles Wan 2.1, InfiniteTalk, and GGUF loading)
-if; then
+if [ ! -d "ComfyUI-WanVideoWrapper" ]; then
     echo "Cloning WanVideoWrapper..."
     git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
     cd ComfyUI-WanVideoWrapper
-    pip install -r requirements.txt
-    cd..
+    pip install -r requirements.txt --break-system-packages 2>/dev/null || echo "Failed to install requirements for WanVideoWrapper, trying system install..." && pip install -r requirements.txt
+    cd ..
 fi
 
 # ComfyUI Manager
-if [! -d "ComfyUI-Manager" ]; then
+if [ ! -d "ComfyUI-Manager" ]; then
     git clone https://github.com/ltdrdata/ComfyUI-Manager.git
 fi
 
 # VideoHelperSuite (For video saving)
-if; then
+if [ ! -d "ComfyUI-VideoHelperSuite" ]; then
+    echo "Cloning VideoHelperSuite..."
     git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
     cd ComfyUI-VideoHelperSuite
-    pip install -r requirements.txt
-    cd..
+    pip install -r requirements.txt --break-system-packages 2>/dev/null || echo "Failed to install requirements for VideoHelperSuite, trying system install..." && pip install -r requirements.txt
+    cd ..
 fi
 
 # 4. Model Acquisition (GGUF Optimized for 24GB VRAM)
