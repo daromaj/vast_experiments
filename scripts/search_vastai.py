@@ -26,7 +26,8 @@ MAX_INET_COST = 0.001  # $/GB (= $1/TB)
 MIN_INET_DOWN_SPEED = 1000  # Mb/s
 
 # GPU filter - exclude incompatible GPUs
-EXCLUDE_GPU_NAMES = ["RTX 5090", "RTX_5090"]  # sm_120 not supported by PyTorch 2.4.1
+# EXCLUDE_GPU_NAMES = ["RTX 5090", "RTX_5090"]  # sm_120 not supported by PyTorch 2.4.1
+EXCLUDE_GPU_NAMES = []
 
 # Cost calculation parameters
 CONTAINER_SIZE_GB = 120  # GB (sufficient with cache cleanup)
