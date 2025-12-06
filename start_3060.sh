@@ -7,13 +7,18 @@ source /venv/main/bin/activate
 
 # 2. Install SageAttention (Critical for 3090 speed)
 # As of Dec 2025, this installs the stable version compatible with Ampere cards
-pip install sageattention --no-build-isolation
+if ! pip show sageattention > /dev/null 2>&1; then
+    pip install sageattention --no-build-isolation
+else
+    echo "SageAttention is already installed, skipping installation."
+fi
 
 # Navigate to ComfyUI custom nodes directory
 cd /workspace/ComfyUI/custom_nodes
 
 # Install from Git repositories
-git clone https://github.com/ltdrdata/ComfyUI-Manager.git
+# ComfyUI Manager
+# git clone https://github.com/ltdrdata/ComfyUI-Manager.git
 
 
 # Kijai's Wrapper (Handles Wan 2.1, InfiniteTalk, and GGUF loading)
