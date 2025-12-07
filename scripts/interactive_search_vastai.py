@@ -165,7 +165,7 @@ def create_bid_instance(offer: Dict):
     # Add 0.01 to bid price as suggested
     bid_price = dph + 0.01
 
-    cmd = ["vastai", "create", "instance", str(machine_id), "--disk", "120", "--bid_price", str(bid_price), "--template_hash", "2799f9137defc5ad9cc0be152e6ad4c0"]
+    cmd = ["vastai", "create", "instance", str(machine_id), "--disk", "120", "--bid_price", str(bid_price), "--template_hash", "a3b79706f4f5ed8164bb1fadaeea2718"]
 
     print(f"\n🖥️ Creating bid instance for machine {machine_id} with bid price ${bid_price:.2f}...")
     try:
