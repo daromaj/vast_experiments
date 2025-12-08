@@ -76,7 +76,9 @@ function provisioning_start() {
 
 function provisioning_get_apt_packages() {
     if [[ -n $APT_PACKAGES ]]; then
-        sudo $APT_INSTALL ${APT_PACKAGES[@]}
+        # Use APT_INSTALL if defined, otherwise fallback to apt-get
+        local apt_cmd="${APT_INSTALL:-apt-get install -y}"
+        sudo $apt_cmd ${APT_PACKAGES[@]}
     fi
 }
 
@@ -142,10 +144,12 @@ function provisioning_download() {
     fi
 
     # Use aria2c with optimal settings (16 parallel connections, auto-resume)
+    # --summary-interval=10: Show progress every 10 seconds (default is 60)
+    # --console-log-level=notice: Show download progress and errors
     if [[ -n $auth_header ]]; then
-        aria2c -x 16 -s 16 -k 1M -c $auth_header -d "$dir" "$url"
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice $auth_header -d "$dir" "$url"
     else
-        aria2c -x 16 -s 16 -k 1M -c -d "$dir" "$url"
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice -d "$dir" "$url"
     fi
 
     # Note: No explicit error handling - continue on failures, check logs later
