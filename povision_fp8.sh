@@ -3,9 +3,14 @@
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
 
-APT_PACKAGES=()
+APT_PACKAGES=(aria2)
 PIP_PACKAGES=()
-NODES=()
+NODES=(
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
+    "https://github.com/kijai/ComfyUI-MelBandRoFormer"
+    "https://github.com/kijai/ComfyUI-KJNodes"
+)
 
 WORKFLOWS=(
     # "https://raw.githubusercontent.com/vast-ai/base-image/refs/heads/main/derivatives/pytorch/derivatives/comfyui/workflows/text_to_video_wan.json"
@@ -14,7 +19,7 @@ WORKFLOWS=(
 
 VAE_MODELS=(
     # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
-    "https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1_VAE_bf16.safetensors"
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"
 )
 
 CLIP_VISION=(
@@ -39,6 +44,16 @@ DIFFUSION_MODELS=(
 )
 
 function provisioning_start() {
+    # Setup logging
+    LOG_FILE="${WORKSPACE}/provisioning.log"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "[$(date)] Starting provisioning..."
+
+    # Pre-flight check for aria2c
+    if ! command -v aria2c &> /dev/null; then
+        echo "NOTICE: aria2c not found - will be installed via APT_PACKAGES"
+    fi
+
     provisioning_print_header
     provisioning_get_apt_packages
     provisioning_get_nodes
@@ -52,7 +67,7 @@ function provisioning_start() {
     provisioning_get_files "${COMFYUI_DIR}/models/diffusion_models" "${DIFFUSION_MODELS[@]}"
     provisioning_get_files \
         "${COMFYUI_DIR}/models/lora" \
-        "${LORA_MODELS[@]}"    
+        "${LORAS[@]}"    
 
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
 
@@ -117,14 +132,23 @@ function provisioning_print_end() {
 }
 
 function provisioning_download() {
-    if [[ -n $HF_TOKEN && $1 =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
-        auth_token="$HF_TOKEN"
+    local url="$1"
+    local dir="$2"
+    local auth_header=""
+
+    # Detect HuggingFace URLs and add auth if token exists
+    if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
+        auth_header="--header=Authorization: Bearer $HF_TOKEN"
     fi
-    if [[ -n $auth_token ]]; then
-        wget --header="Authorization: Bearer $auth_token" -qnc --content-disposition --show-progress -e dotbytes=4M -P "$2" "$1"
+
+    # Use aria2c with optimal settings (16 parallel connections, auto-resume)
+    if [[ -n $auth_header ]]; then
+        aria2c -x 16 -s 16 -k 1M -c $auth_header -d "$dir" "$url"
     else
-        wget -qnc --content-disposition --show-progress -e dotbytes=4M -P "$2" "$1"
+        aria2c -x 16 -s 16 -k 1M -c -d "$dir" "$url"
     fi
+
+    # Note: No explicit error handling - continue on failures, check logs later
 }
 
 if [[ ! -f /.noprovisioning ]]; then
