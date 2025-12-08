@@ -61,8 +61,33 @@ cd /workspace
 
 - Docker with NVIDIA GPU support
 - NVIDIA drivers with CUDA 12.4+ compatibility
-- At least 50GB free disk space for model weights
+- At least 30GB free disk space for model weights (see download sizes below)
 - Fast internet connection for model downloads
+
+## Provisioning Scripts
+
+### povision_fp8.sh
+
+Automated provisioning script for ComfyUI with Wan2.1 models in FP8 format.
+
+**Total Download Size: ~29.94 GB**
+
+#### Model File Breakdown:
+- `Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors`: 15 GB (main diffusion model)
+- `umt5-xxl-enc-bf16.safetensors`: 10 GB (text encoder)
+- `Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors`: 2.5 GB
+- `clip_vision_h.safetensors`: 1.1 GB
+- `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors`: 703 MB
+- `MelBandRoformer_fp16.safetensors`: 435 MB
+- `Wan2_1_VAE_bf16.safetensors`: 242 MB
+
+#### ComfyUI Custom Nodes:
+- ComfyUI-WanVideoWrapper
+- ComfyUI-VideoHelperSuite
+- ComfyUI-MelBandRoFormer
+- ComfyUI-KJNodes
+
+**Check current sizes:** Run `scripts/check_download_sizes.sh` to verify latest file sizes without downloading entire files.
 
 ## Next Steps
 
@@ -72,10 +97,17 @@ After successful local testing:
 3. Set up monitoring and logging
 4. Optimize for performance
 
-    3  apt-get install -y aria2
-    4  wget https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/povision_fp8.sh
-    5  chmod +x provisioning.log 
-    6  ./provisioning.log 
-    7  ls -la
-    8  chmod +x provision_fp8.sh
-    9  chmod +x povision_fp8.sh
+## Quick Start on vast.ai
+
+```bash
+# Install aria2 for faster downloads
+apt-get update && apt-get install -y aria2
+
+# Download and run provisioning script
+wget https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/povision_fp8.sh
+chmod +x povision_fp8.sh
+./povision_fp8.sh
+
+# Copy outputs from vast.ai instance
+vastai copy INSTANCE_ID:/workspace/ComfyUI/output local:output
+```
