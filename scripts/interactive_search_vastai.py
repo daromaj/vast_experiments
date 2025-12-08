@@ -22,7 +22,7 @@ from typing import List, Dict, Optional
 # Search criteria
 MIN_GPU_RAM = 24  # GB (minimum for Wan2.1-I2V-14B with offloading)
 MIN_DISK_SPACE = 120  # GB (sufficient with cache cleanup)
-MAX_INET_COST = 0.001  # $/GB (= $1/TB)
+MAX_INET_COST = 0.002  # $/GB (= $2/TB)
 MIN_INET_DOWN_SPEED = 1000  # Mb/s
 
 # GPU filter - exclude incompatible GPUs
