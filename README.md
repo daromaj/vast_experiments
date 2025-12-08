@@ -71,3 +71,11 @@ After successful local testing:
 2. Configure production environment
 3. Set up monitoring and logging
 4. Optimize for performance
+
+    3  apt-get install -y aria2
+    4  wget https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/povision_fp8.sh
+    5  chmod +x provisioning.log 
+    6  ./provisioning.log 
+    7  ls -la
+    8  chmod +x provision_fp8.sh
+    9  chmod +x povision_fp8.sh
