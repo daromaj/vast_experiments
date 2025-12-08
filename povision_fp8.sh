@@ -137,6 +137,10 @@ function provisioning_download() {
     local url="$1"
     local dir="$2"
     local auth_header=""
+    local filename=""
+
+    # Extract filename from URL (remove query parameters and get last path segment)
+    filename=$(basename "${url%%\?*}")
 
     # Detect HuggingFace URLs and add auth if token exists
     if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
@@ -144,12 +148,19 @@ function provisioning_download() {
     fi
 
     # Use aria2c with optimal settings (16 parallel connections, auto-resume)
+    # -o: Explicit output filename to avoid hash-based names
     # --summary-interval=10: Show progress every 10 seconds (default is 60)
     # --console-log-level=notice: Show download progress and errors
+    # --allow-overwrite=true: Allow overwriting existing files
+    # --auto-file-renaming=false: Don't rename files automatically
     if [[ -n $auth_header ]]; then
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice $auth_header -d "$dir" "$url"
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
+            --allow-overwrite=true --auto-file-renaming=false \
+            -o "$filename" $auth_header -d "$dir" "$url"
     else
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice -d "$dir" "$url"
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
+            --allow-overwrite=true --auto-file-renaming=false \
+            -o "$filename" -d "$dir" "$url"
     fi
 
     # Note: No explicit error handling - continue on failures, check logs later
