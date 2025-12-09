@@ -111,3 +111,14 @@ chmod +x povision_fp8.sh
 # Copy outputs from vast.ai instance
 vastai copy INSTANCE_ID:/workspace/ComfyUI/output local:output
 ```
+
+## execution time for ~60s video
+
+Mon Dec  8 22:20:07 UTC 2025
+** ComfyUI startup time: 2025-12-08 22:22:31.139
+
+Prompt executed in 00:16:23
+
+overall potentially under 20 minutes e2e for 60s video (on vastai instance with fast internet)
+
+for instance with $0.60/hr this should be less than $0.30 per video
