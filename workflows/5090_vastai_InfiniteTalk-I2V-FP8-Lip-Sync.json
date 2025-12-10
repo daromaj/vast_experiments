@@ -1035,7 +1035,7 @@
       "widgets_values": [
         "umt5-xxl-enc-bf16.safetensors",
         "bf16",
-        "A man talking. Hands relaxed on the table.",
+        "Generate a video of a friendly older bearded man with a warm smile, sitting calmly and speaking directly to the camera. Hands relaxed on the table.",
         "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
         "disabled",
         false,
