@@ -4,7 +4,8 @@ source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
 
 APT_PACKAGES=(aria2)
-PIP_PACKAGES=()
+PIP_PACKAGES=(
+)
 NODES=(
     "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
@@ -58,6 +59,7 @@ function provisioning_start() {
     provisioning_get_apt_packages
     provisioning_get_nodes
     provisioning_get_pip_packages
+    provisioning_install_sageattention
 
     workflows_dir="${COMFYUI_DIR}/user/default/workflows"
     mkdir -p "${workflows_dir}"
@@ -85,6 +87,22 @@ function provisioning_get_apt_packages() {
 function provisioning_get_pip_packages() {
     if [[ -n $PIP_PACKAGES ]]; then
         pip install --no-cache-dir ${PIP_PACKAGES[@]}
+    fi
+}
+
+function provisioning_install_sageattention() {
+    echo "Installing SageAttention..."
+    local repo="https://github.com/thu-ml/SageAttention.git"
+    local path="${WORKSPACE}/SageAttention"
+    if [[ ! -d $path ]]; then
+        echo "Cloning SageAttention..."
+        git clone "${repo}" "${path}"
+    else
+        echo "SageAttention directory already exists, skipping clone."
+    fi
+    if [[ -d $path ]]; then
+        echo "Installing SageAttention..."
+        ( cd "$path" && export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 && python setup.py install )
     fi
 }
 
