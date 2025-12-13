@@ -94,6 +94,8 @@ function provisioning_install_sageattention() {
     echo "Installing SageAttention..."
     local repo="https://github.com/thu-ml/SageAttention.git"
     local path="${WORKSPACE}/SageAttention"
+    # pip install /tmp/sageattention-*.whl
+
     if [[ ! -d $path ]]; then
         echo "Cloning SageAttention..."
         git clone "${repo}" "${path}"
