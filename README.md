@@ -122,3 +122,5 @@ Prompt executed in 00:16:23
 overall potentially under 20 minutes e2e for 60s video (on vastai instance with fast internet)
 
 for instance with $0.60/hr this should be less than $0.30 per video
+
+13:29 for 58s audio with sageattention 2 and 3 installed but regular sage attention selected
