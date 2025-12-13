@@ -16,6 +16,7 @@ NODES=(
 WORKFLOWS=(
     # "https://raw.githubusercontent.com/vast-ai/base-image/refs/heads/main/derivatives/pytorch/derivatives/comfyui/workflows/text_to_video_wan.json"
     "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/InfiniteTalk-I2V-FP8-Lip-Sync.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_sage_new_prompts.json"
 )
 
 VAE_MODELS=(
@@ -104,7 +105,7 @@ function provisioning_install_sageattention() {
     fi
     if [[ -d $path ]]; then
         echo "Installing SageAttention..."
-        ( cd "$path" && export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 && python setup.py install )
+        ( cd "$path" && export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 && cd SageAttention/sageattention3_blackwell && python setup.py install )
     fi
 }
 
