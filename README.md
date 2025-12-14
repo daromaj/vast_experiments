@@ -130,3 +130,9 @@ for instance with $0.60/hr this should be less than $0.30 per video
 4090 - 314s for 10s video with sageattention 2 and block swap 20 ~ 32 minutes for 60s video
 4090 - 238s for 10s video with sageattention 2 and block swap 5 ~ 24minutes for 60s video
 
+58s Prompt executed in 00:49:55
+
+we need to choose pcie4 for 4090
+so far I was not able to fit models in 4090 memory
+
+Also - if the host is not ready within a minute it's probably better to cancel the instance and try different one
