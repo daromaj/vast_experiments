@@ -136,3 +136,25 @@ we need to choose pcie4 for 4090
 so far I was not able to fit models in 4090 memory
 
 Also - if the host is not ready within a minute it's probably better to cancel the instance and try different one
+
+4090
+# Run this inside a standard PyTorch 2.5/CUDA 12.4 container
+export TORCH_CUDA_ARCH_LIST="8.9"
+python setup.py bdist_wheel
+
+5090
+# Run this on your CUDA 12.9 machine
+export TORCH_CUDA_ARCH_LIST="12.0"
+
+# Optional: Add a local version tag so you don't mix them up
+export SAG_VERSION_SUFFIX="+cu129" 
+
+python setup.py bdist_wheel
+
+export TORCH_CUDA_ARCH_LIST="12.0"
+export SAG_VERSION_SUFFIX="+cu129"
+
+# Instead of "python setup.py bdist_wheel", use:
+pip wheel . --no-deps -w dist/
+
+
