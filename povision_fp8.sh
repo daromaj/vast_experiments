@@ -45,6 +45,11 @@ DIFFUSION_MODELS=(
 
 )
 
+SAGEATTENTION_WHEELS=(
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattn3-1.0.0-cp312-cp312-linux_x86_64.whl"
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+)
+
 function provisioning_start() {
     # Setup logging
     LOG_FILE="${WORKSPACE}/provisioning.log"
@@ -92,21 +97,17 @@ function provisioning_get_pip_packages() {
 }
 
 function provisioning_install_sageattention() {
-    echo "Installing SageAttention..."
-    local repo="https://github.com/thu-ml/SageAttention.git"
-    local path="${WORKSPACE}/SageAttention"
-    # pip install /tmp/sageattention-*.whl
+    echo "Installing SageAttention from wheel files..."
+    local wheel_dir="${WORKSPACE}/wheels"
+    mkdir -p "$wheel_dir"
 
-    if [[ ! -d $path ]]; then
-        echo "Cloning SageAttention..."
-        git clone "${repo}" "${path}"
-    else
-        echo "SageAttention directory already exists, skipping clone."
-    fi
-    if [[ -d $path ]]; then
-        echo "Installing SageAttention..."
-        ( cd "$path" && export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 && cd SageAttention/sageattention3_blackwell && python setup.py install )
-    fi
+    # Download wheel files
+    for url in "${SAGEATTENTION_WHEELS[@]}"; do
+        provisioning_download "$url" "$wheel_dir"
+    done
+
+    # Install all downloaded wheels
+    pip install --no-cache-dir "$wheel_dir"/*.whl
 }
 
 function provisioning_get_nodes() {
