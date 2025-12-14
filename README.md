@@ -124,3 +124,9 @@ overall potentially under 20 minutes e2e for 60s video (on vastai instance with 
 for instance with $0.60/hr this should be less than $0.30 per video
 
 13:29 for 58s audio with sageattention 2 and 3 installed but regular sage attention selected
+
+8 minutes just to get comfyui up and running
+
+4090 - 314s for 10s video with sageattention 2 and block swap 20 ~ 32 minutes for 60s video
+4090 - 238s for 10s video with sageattention 2 and block swap 5 ~ 24minutes for 60s video
+
