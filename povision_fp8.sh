@@ -67,7 +67,11 @@ function provisioning_start() {
     provisioning_get_apt_packages
     provisioning_get_nodes
     provisioning_get_pip_packages
-    provisioning_install_sageattention
+    # provisioning_install_sageattention  # Disabled: using source build instead
+    # Start SageAttention build in background (CPU/GPU compilation) while downloads run (network I/O)
+    # Output is prefixed with [SAGE] to distinguish from download progress
+    { provisioning_install_sageattention_source 2>&1 | sed 's/^/[SAGE] /'; } &
+    SAGE_BUILD_PID=$!
 
     workflows_dir="${COMFYUI_DIR}/user/default/workflows"
     mkdir -p "${workflows_dir}"
@@ -80,6 +84,16 @@ function provisioning_start() {
         "${LORAS[@]}"    
 
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
+
+    # Wait for SageAttention build to complete before finishing provisioning
+    echo "Waiting for SageAttention build to complete..."
+    wait $SAGE_BUILD_PID
+    SAGE_EXIT_CODE=$?
+    if [[ $SAGE_EXIT_CODE -ne 0 ]]; then
+        echo "WARNING: SageAttention build failed with exit code $SAGE_EXIT_CODE - check logs above"
+    else
+        echo "SageAttention build completed successfully"
+    fi
 
     provisioning_print_end
 }
@@ -99,6 +113,7 @@ function provisioning_get_pip_packages() {
 }
 
 function provisioning_install_sageattention() {
+    # DEPRECATED: Wheel-based installation - kept for reference
     echo "Installing SageAttention from wheel files..."
     local wheel_dir="${WORKSPACE}/wheels"
     mkdir -p "$wheel_dir"
@@ -110,6 +125,48 @@ function provisioning_install_sageattention() {
 
     # Install all downloaded wheels
     pip install --no-cache-dir "$wheel_dir"/*.whl
+}
+
+function provisioning_install_sageattention_source() {
+    # Builds SageAttention from source with parallel compilation
+    # Additionally builds sageattention3_blackwell if running on a 5090 GPU
+    echo "Building SageAttention from source..."
+    
+    local sage_dir="${WORKSPACE}/SageAttention"
+    
+    # Clone the repository if not already present
+    if [[ ! -d "$sage_dir" ]]; then
+        echo "Cloning SageAttention repository..."
+        git clone https://github.com/thu-ml/SageAttention.git "$sage_dir"
+    else
+        echo "SageAttention directory exists, pulling latest..."
+        ( cd "$sage_dir" && git pull )
+    fi
+    
+    # Set parallel compilation environment variables for faster builds
+    export EXT_PARALLEL=4
+    export NVCC_APPEND_FLAGS="--threads 8"
+    export MAX_JOBS=32
+    
+    # Build and install main SageAttention package
+    echo "Installing SageAttention (this may take a while)..."
+    ( cd "$sage_dir" && python setup.py install )
+    
+    # Check if running on Blackwell (5090) GPU and build sageattention3 if so
+    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
+        echo "Blackwell GPU (5090) detected - building sageattention3_blackwell..."
+        local blackwell_dir="${sage_dir}/sageattention3_blackwell"
+        if [[ -d "$blackwell_dir" ]]; then
+            ( cd "$blackwell_dir" && python setup.py install )
+            echo "sageattention3_blackwell installed successfully"
+        else
+            echo "WARNING: sageattention3_blackwell directory not found at $blackwell_dir"
+        fi
+    else
+        echo "Non-Blackwell GPU detected - skipping sageattention3_blackwell build"
+    fi
+    
+    echo "SageAttention source build complete"
 }
 
 function provisioning_get_nodes() {
