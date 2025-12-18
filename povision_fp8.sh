@@ -157,7 +157,8 @@ function provisioning_install_sageattention_source() {
         echo "Blackwell GPU (5090) detected - building sageattention3_blackwell..."
         local blackwell_dir="${sage_dir}/sageattention3_blackwell"
         if [[ -d "$blackwell_dir" ]]; then
-            ( cd "$blackwell_dir" && python setup.py install )
+            # doesn't seem to help with speed for now
+            # ( cd "$blackwell_dir" && python setup.py install )
             echo "sageattention3_blackwell installed successfully"
         else
             echo "WARNING: sageattention3_blackwell directory not found at $blackwell_dir"
