@@ -19,6 +19,17 @@ NODES=(
     "https://github.com/rgthree/rgthree-comfy.git"
     "https://github.com/crystian/ComfyUI-Crystools.git"
     "https://github.com/PGCRT/CRT-Nodes.git"
+    # z-image-turbo
+    "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+    "https://github.com/yolain/ComfyUI-Easy-Use.git"
+    "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git"
+    "https://github.com/ssitu/ComfyUI_UltimateSDUpscale.git"
+    "https://github.com/sipherxyz/comfyui-art-venture.git"
+    "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+    "https://github.com/gseth/ControlAltAI-Nodes.git"
+    "https://github.com/omar92/ComfyUI-QualityOfLifeSuit_Omar92.git"
+    "https://github.com/vrgamegirl19/comfyui-vrgamedevgirl.git"
+    "https://github.com/giriss/comfy-image-saver.git"
 )
 
 WORKFLOWS=(
@@ -34,6 +45,7 @@ VAE_MODELS=(
     # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_2_VAE_bf16.safetensors"
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
 )
 
 CLIP_VISION=(
@@ -48,6 +60,7 @@ TEXT_ENCODERS=(
     # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"    
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors"
 )
 
 DIFFUSION_MODELS=(
@@ -60,6 +73,7 @@ DIFFUSION_MODELS=(
     "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/6251b3a2bd544aaa31400138e55abda4722735cc/MelBandRoformer_fp16.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/T2V/Wan2_2-T2V-A14B_HIGH_fp8_e4m3fn_scaled_KJ.safetensors?download=true"
     "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/T2V/Wan2_2-T2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors?download=true"
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors"
 )
 
 function provisioning_start() {
@@ -109,7 +123,25 @@ function provisioning_start() {
     provisioning_download "https://huggingface.co/moxeeeem/wav2vec2-finetuned-pronunciation-correction/resolve/main/model.safetensors" \
         "${COMFYUI_DIR}/models/audio_encoders" \
         "wav2vec2-finetuned-pronunciation-correction.safetensors"
-    
+    # z-image-turbo
+    mkdir -p "${COMFYUI_DIR}/models/ultralytics/bbox"
+    provisioning_download "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt?download=true" \
+        "${COMFYUI_DIR}/models/ultralytics/bbox" \
+        "face_yolov8m.pt"
+
+    provisioning_download "https://huggingface.co/Tenofas/ComfyUI/resolve/d79945fb5c16e8aef8a1eb3ba1788d72152c6d96/ultralytics/bbox/Eyeful_v2-Paired.pt?download=true" \
+        "${COMFYUI_DIR}/models/ultralytics/bbox" \
+        "Eyeful_v2-Paired.pt"
+
+    provisioning_download "https://huggingface.co/xingren23/comfyflow-models/resolve/main/ultralytics/bbox/hand_yolov8s.pt?download=true" \
+        "${COMFYUI_DIR}/models/ultralytics/bbox" \
+        "hand_yolov8s.pt"
+
+    mkdir -p "${COMFYUI_DIR}/models/SEEDVR2"
+    provisioning_download "https://huggingface.co/cmeka/SeedVR2-GGUF/resolve/main/seedvr2_ema_7b-Q4_K_M.gguf?download=true" \
+        "${COMFYUI_DIR}/models/SEEDVR2" \
+        "seedvr2_ema_7b-Q4_K_M.gguf"
+
     provisioning_print_end
 }
 
