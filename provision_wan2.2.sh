@@ -25,9 +25,9 @@ WORKFLOWS=(
     # "https://raw.githubusercontent.com/vast-ai/base-image/refs/heads/main/derivatives/pytorch/derivatives/comfyui/workflows/text_to_video_wan.json"
     # "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/InfiniteTalk-I2V-FP8-Lip-Sync.json"
     # "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_sage_new_prompts.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/WAN 2.2 I2V.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/WAN 2.2 T2V.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/WAN 2.2 I2V StartEnd Frames.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/WAN%202.2%20I2V.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/WAN%202.2%20T2V.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/WAN%202.2%20I2V%20StartEnd%20Frames.json"
 )
 
 VAE_MODELS=(
@@ -58,6 +58,8 @@ DIFFUSION_MODELS=(
     "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors"
     # "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors"
     "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/6251b3a2bd544aaa31400138e55abda4722735cc/MelBandRoformer_fp16.safetensors"
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/T2V/Wan2_2-T2V-A14B_HIGH_fp8_e4m3fn_scaled_KJ.safetensors?download=true"
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/T2V/Wan2_2-T2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors?download=true"
 )
 
 function provisioning_start() {
