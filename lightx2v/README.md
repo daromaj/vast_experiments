@@ -1,5 +1,9 @@
 # LightX2V Qwen-Image-Edit Server
 
+#TODO
+test https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html
+
+
 A high-performance, persistent image editing server using **Qwen-Image-Edit-2511** (Full Model) optimized for **32GB VRAM GPUs** via CPU offloading.
 
 ## Quickstart
