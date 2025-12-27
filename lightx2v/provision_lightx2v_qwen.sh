@@ -34,6 +34,10 @@ echo "[$(date)] Installing Python dependencies..."
 # Ensure uv is installed
 pip install uv
 
+# Install server dependencies
+echo "[$(date)] Installing server dependencies..."
+pip install fastapi uvicorn python-multipart
+
 # Clone LightX2V if not present
 if [ ! -d "$LIGHTX2V_DIR" ]; then
     echo "[$(date)] Cloning LightX2V..."
@@ -51,9 +55,19 @@ uv pip install -v .
 
 
 # 3.5. INSTALL SAGEATTENTION
-echo "[$(date)] Installing SageAttention..."
-# User requested specific version without build isolation
-pip install sageattention==2.2.0 --no-build-isolation
+# SageAttention is disabled as it caused runtime errors (NoneType not callable)
+# and we use standard torch_sdpa instead.
+# echo "[$(date)] Installing SageAttention..."
+# # Try to install from PyPI first
+# if ! pip install sageattention==2.2.0 --no-build-isolation; then
+#     echo "[$(date)] pip install failed, building SageAttention from source..."
+#     cd "$WORKSPACE"
+#     git clone https://github.com/thu-ml/SageAttention.git
+#     cd SageAttention
+#     export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32
+#     python setup.py install
+#     cd "$LIGHTX2V_DIR"
+# fi
 
 
 # 4. MODEL DOWNLOADS
@@ -89,40 +103,53 @@ mkdir -p "$QWEN_MODELS_DIR"
 # echo "[$(date)] Downloading Qwen-Image via huggingface_hub..."
 # huggingface-cli download --resume-download Qwen/Qwen-Image --local-dir "$QWEN_MODELS_DIR/Qwen-Image" --exclude "*.bin"
 
-# 4.2 Qwen-Image-Edit-2511
-# We exclude the huge Transformer weights (~40GB) because we use the fused Lightning FP8 checkpoint instead.
-# Text Encoder (~16GB) and VAE are still required.
-echo "[$(date)] Downloading Qwen-Image-Edit-2511 (excluding base transformer)..."
-huggingface-cli download --resume-download Qwen/Qwen-Image-Edit-2511 \
-    --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511" \
-    --exclude "transformer/diffusion_pytorch_model*"
+# 4.2 Qwen-Image-Edit-2511 (Complete Model)
+# Download the full model including transformer weights (~55GB total)
+# This includes:
+#   - Text Encoder: ~16GB (4 safetensors files)
+#   - Transformer: ~39GB (5 safetensors files)
+#   - VAE: included in base model
+# We use CPU offload to fit this in 32GB VRAM
+echo "[$(date)] Downloading Qwen-Image-Edit-2511 (complete model with transformer)..."
+hf download Qwen/Qwen-Image-Edit-2511 \
+    --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511"
+
+# Note: FP8 quantized checkpoint is NOT downloaded because:
+# - sgl-kernel has initialization issues
+# - Full-precision model works perfectly with CPU offload on 32GB GPU
 
 
-# 4.3 (Optional) Qwen-Image-Edit-2511-Lightning (FP8/Distilled)
-echo "[$(date)] Downloading Qwen-Image-Edit-2511-Lightning (Accelerated)..."
-# We only need the specific FP8 safetensors file, not the ComfyUI version or redundant BF16 weights
-huggingface-cli download --resume-download lightx2v/Qwen-Image-Edit-2511-Lightning \
-    --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511-Lightning" \
-    --include "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors"
+# 5. DOWNLOAD EXAMPLE SCRIPT
+echo "[$(date)] Downloading edit_image.py script..."
+SCRIPTS_DIR="/workspace"
 
-
-# 5. DOWNLOAD EXAMPLE SCRIPTS
-echo "[$(date)] Downloading example scripts..."
-SCRIPTS_DIR="$LIGHTX2V_DIR/examples/qwen_custom"
-mkdir -p "$SCRIPTS_DIR"
-
-# Raw URLs for the scripts
-GEN_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/generate_image.py"
+# Raw URL for the script
 EDIT_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/edit_image.py"
 
-echo "Downloading generate_image.py..."
-wget -O "$SCRIPTS_DIR/generate_image.py" "$GEN_SCRIPT_URL"
-
-
-echo "Downloading edit_image.py..."
+echo "Downloading edit_image.py to /workspace..."
 wget -O "$SCRIPTS_DIR/edit_image.py" "$EDIT_SCRIPT_URL"
+
+# Raw URL for the server script
+SERVER_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/server.py"
+
+echo "Downloading server.py to /workspace..."
+wget -O "$SCRIPTS_DIR/server.py" "$SERVER_SCRIPT_URL"
 
 echo "Downloading example_edit_input.json..."
 wget -O "$SCRIPTS_DIR/example_edit_input.json" "https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/example_edit_input.json"
 
+# Raw URL for the example server request script
+EXAMPLE_SERVER_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/example_server_request.sh"
+
+echo "Downloading example_server_request.sh..."
+wget -O "$SCRIPTS_DIR/example_server_request.sh" "$EXAMPLE_SERVER_SCRIPT_URL"
+chmod +x "$SCRIPTS_DIR/example_server_request.sh"
+
 echo "[$(date)] Provisioning Complete!"
+
+# 6. START SERVER
+echo "[$(date)] Starting Image Edit Server..."
+# Start server in background but keep logging to file
+cd /workspace
+nohup uvicorn server:app --host 0.0.0.0 --port 8000 > /workspace/server.log 2>&1 &
+echo "[$(date)] Server started in background. Logs at /workspace/server.log"
