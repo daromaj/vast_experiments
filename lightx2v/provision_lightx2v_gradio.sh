@@ -32,7 +32,7 @@ apt-get install -y aria2 git nano ffmpeg libgl1 libglx-mesa0 libglib2.0-0 build-
 echo "[$(date)] Installing Python dependencies..."
 
 # Ensure uv is installed
-pip install uv huggingface_hub[cli] hf_transfer
+pip install uv huggingface_hub[cli] hf_transfer modelscope
 
 # Enable hf_transfer for faster downloads
 export HF_HUB_ENABLE_HF_TRANSFER=1
