@@ -90,18 +90,18 @@ mkdir -p "$MODELS_DIR"
 # 4.1 Wan2.1 Model (Distilled)
 # Downloading Wan2.1 720p model
 echo "[$(date)] Downloading Wan2.1 720p model..."
-huggingface-cli download lightx2v/Wan2.1-Distill-Models wan2.1_i2v_720p_lightx2v_4step.safetensors --local-dir "$MODELS_DIR"
-huggingface-cli download lightx2v/Wan2.1-Distill-Models config.json --local-dir "$MODELS_DIR"
+hf download lightx2v/Wan2.1-Distill-Models wan2.1_i2v_720p_lightx2v_4step.safetensors --local-dir "$MODELS_DIR"
+hf download lightx2v/Wan2.1-Distill-Models config.json --local-dir "$MODELS_DIR"
 
 # 4.2 Encoders
 # "Text and Image Encoders can be downloaded from Encoders"
 echo "[$(date)] Downloading Encoders..."
-huggingface-cli download lightx2v/Encoders --local-dir "$MODELS_DIR"
+hf download lightx2v/Encoders --local-dir "$MODELS_DIR"
 
 # 4.3 VAE
 # "VAE can be downloaded from Autoencoders"
 echo "[$(date)] Downloading VAE..."
-huggingface-cli download lightx2v/Autoencoders --local-dir "$MODELS_DIR"
+hf download lightx2v/Autoencoders --local-dir "$MODELS_DIR"
 
 
 # 5. CONFIGURE STARTUP SCRIPT
