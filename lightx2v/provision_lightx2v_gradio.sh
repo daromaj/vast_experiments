@@ -75,10 +75,23 @@ fi
 uv pip install vllm sgl-kernel
 
 # q8-kernel (Only for ADA architecture GPUs)
-# We'll attempt to install it, but it might fail if not on ADA or if compilation fails.
-echo "[$(date)] Attempting to install q8-kernel..."
-if ! uv pip install git+https://github.com/KONAKONA666/q8_kernels.git; then
-    echo "[$(date)] Warning: q8-kernel installation failed. This is expected if not on ADA GPU."
+# Ada Lovelace has compute capability 8.9
+echo "[$(date)] Checking GPU architecture..."
+if command -v nvidia-smi &> /dev/null; then
+    COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1)
+    echo "Detected Compute Capability: $COMPUTE_CAP"
+    
+    # Check if compute capability is 8.9 (Ada)
+    if [[ "$COMPUTE_CAP" == "8.9" ]]; then
+        echo "[$(date)] Ada architecture detected. Installing q8-kernel..."
+        if ! uv pip install git+https://github.com/KONAKONA666/q8_kernels.git; then
+             echo "[$(date)] Warning: q8-kernel installation failed."
+        fi
+    else
+        echo "[$(date)] Compute Capability $COMPUTE_CAP is not 8.9 (Ada). Skipping q8-kernel."
+    fi
+else
+    echo "[$(date)] nvidia-smi not found. Skipping GPU architecture check and q8-kernel installation."
 fi
 
 # 4. MODEL DOWNLOADS
