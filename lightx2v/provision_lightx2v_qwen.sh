@@ -116,7 +116,11 @@ EDIT_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/mast
 echo "Downloading generate_image.py..."
 wget -O "$SCRIPTS_DIR/generate_image.py" "$GEN_SCRIPT_URL"
 
+
 echo "Downloading edit_image.py..."
 wget -O "$SCRIPTS_DIR/edit_image.py" "$EDIT_SCRIPT_URL"
+
+echo "Downloading example_edit_input.json..."
+wget -O "$SCRIPTS_DIR/example_edit_input.json" "https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/example_edit_input.json"
 
 echo "[$(date)] Provisioning Complete!"
