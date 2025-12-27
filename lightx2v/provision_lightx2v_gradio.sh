@@ -58,12 +58,12 @@ uv pip install -v .
 # Install Recommended Optimization Libraries
 echo "[$(date)] Installing Optimization Libraries..."
 # Flash attention (usually pre-installed in some docker images, but good to ensure)
-uv pip install flash-attn
+uv pip install flash-attn --no-build-isolation
 
 # Sage attention
 echo "[$(date)] Installing SageAttention..."
 # Try to install from PyPI first
-if ! uv pip install sageattention==2.2.0; then
+if ! uv pip install sageattention==2.2.0 --no-build-isolation; then
     echo "[$(date)] pip install failed, building SageAttention from source..."
     cd "$WORKSPACE"
     git clone https://github.com/thu-ml/SageAttention.git
