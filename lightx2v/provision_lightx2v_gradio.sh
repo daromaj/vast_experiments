@@ -24,9 +24,9 @@ fi
 echo "[$(date)] Installing system dependencies..."
 apt-get update
 # aria2: for fast downloads
-# libgl1-mesa-glx: often needed for opencv
+# libgl1 libglx-mesa0: for opencv (libgl1-mesa-glx is obsolete in Ubuntu 24.04)
 # ffmpeg: for video processing
-apt-get install -y aria2 git nano ffmpeg libgl1-mesa-glx libglib2.0-0 build-essential
+apt-get install -y aria2 git nano ffmpeg libgl1 libglx-mesa0 libglib2.0-0 build-essential
 
 # 3. INSTALL PYTHON DEPENDENCIES
 echo "[$(date)] Installing Python dependencies..."
