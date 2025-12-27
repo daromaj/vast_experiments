@@ -90,8 +90,12 @@ mkdir -p "$QWEN_MODELS_DIR"
 # huggingface-cli download --resume-download Qwen/Qwen-Image --local-dir "$QWEN_MODELS_DIR/Qwen-Image" --exclude "*.bin"
 
 # 4.2 Qwen-Image-Edit-2511
-echo "[$(date)] Downloading Qwen-Image-Edit-2511..."
-huggingface-cli download --resume-download Qwen/Qwen-Image-Edit-2511 --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511"
+# We exclude the huge Transformer weights (~40GB) because we use the fused Lightning FP8 checkpoint instead.
+# Text Encoder (~16GB) and VAE are still required.
+echo "[$(date)] Downloading Qwen-Image-Edit-2511 (excluding base transformer)..."
+huggingface-cli download --resume-download Qwen/Qwen-Image-Edit-2511 \
+    --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511" \
+    --exclude "transformer/diffusion_pytorch_model*"
 
 
 # 4.3 (Optional) Qwen-Image-Edit-2511-Lightning (FP8/Distilled)
