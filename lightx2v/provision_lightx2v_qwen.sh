@@ -85,14 +85,9 @@ QWEN_MODELS_DIR="$MODELS_DIR/Qwen"
 mkdir -p "$QWEN_MODELS_DIR"
 
 # Qwen-Image (Main Model)
-# We need to download the full repo or specific files? 
-# Usually for HF models, it's best to clone or download all files.
-# Using python script to download snapshot is deeper but safer for folder structures.
-echo "[$(date)] Downloading Qwen-Image via huggingface_hub..."
-export HF_HUB_ENABLE_HF_TRANSFER=1
-pip install huggingface_hub[cli] hf_transfer
-
-huggingface-cli download --resume-download Qwen/Qwen-Image --local-dir "$QWEN_MODELS_DIR/Qwen-Image" --exclude "*.bin"  # Prefer safetensors if available, otherwise remove exclude
+# We can likely skip the base Qwen-Image if we are using the Edit model for T2I
+# echo "[$(date)] Downloading Qwen-Image via huggingface_hub..."
+# huggingface-cli download --resume-download Qwen/Qwen-Image --local-dir "$QWEN_MODELS_DIR/Qwen-Image" --exclude "*.bin"
 
 # 4.2 Qwen-Image-Edit-2511
 echo "[$(date)] Downloading Qwen-Image-Edit-2511..."
@@ -101,7 +96,10 @@ huggingface-cli download --resume-download Qwen/Qwen-Image-Edit-2511 --local-dir
 
 # 4.3 (Optional) Qwen-Image-Edit-2511-Lightning (FP8/Distilled)
 echo "[$(date)] Downloading Qwen-Image-Edit-2511-Lightning (Accelerated)..."
-huggingface-cli download --resume-download lightx2v/Qwen-Image-Edit-2511-Lightning --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511-Lightning"
+# We only need the specific FP8 safetensors file, not the ComfyUI version or redundant BF16 weights
+huggingface-cli download --resume-download lightx2v/Qwen-Image-Edit-2511-Lightning \
+    --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511-Lightning" \
+    --include "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors"
 
 
 # 5. DOWNLOAD EXAMPLE SCRIPTS

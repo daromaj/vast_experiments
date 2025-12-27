@@ -31,8 +31,12 @@ def main():
     parser = argparse.ArgumentParser(description="LightX2V Qwen Image Generation (T2I)")
     parser.add_argument("--prompt", type=str, help="Text prompt for generation")
     parser.add_argument("--prompt_file", type=str, help="Path to file containing the prompt")
-    parser.add_argument("--output", type=str, default="output.png", help="Base path for the generated image (will be uniqueified)")
-    parser.add_argument("--model_path", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511-Lightning", help="Path to Qwen model")
+    parser.add_argument("--output", type=str, default="output.png", help="Base path for the generated image")
+    
+    # Model Paths
+    parser.add_argument("--model_path", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511", help="Path to Base Qwen Model (folders with config.json)")
+    parser.add_argument("--quant_ckpt", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors", help="Path to Quantized Lightning Checkpoint (.safetensors)")
+    
     parser.add_argument("--steps", type=int, default=4, help="Inference steps")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
     
@@ -64,25 +68,26 @@ def main():
     
     print(f"Generating image...")
     print(f"Prompt: {prompt[:100]}...")
-    
+    print(f"Base Model: {args.model_path}")
+    print(f"Quant Ckpt: {args.quant_ckpt}")
+
     # Initialize Pipeline
     pipe = LightX2VPipeline(
         model_path=args.model_path,
-        model_cls="qwen-image-edit-2511", # Using the Edit model in T2I mode
+        model_cls="qwen-image-edit-2511",
         task="t2i", 
     )
 
-    # Enable quantization if Lightning model
-    if "Lightning" in args.model_path:
-        ckpt_path = os.path.join(args.model_path, "Qwen-quant/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors")
-        if os.path.exists(ckpt_path):
-             pipe.enable_quantize(
-                 dit_quantized=True, 
-                 dit_quantized_ckpt=ckpt_path, 
-                 quant_scheme="fp8-sgl"
-             )
-        else:
-            print(f"Warning: Quantized checkpoint not found at {ckpt_path}. Running without explicit quantization config.")
+    # Enable quantization if checkpoint exists
+    if args.quant_ckpt and os.path.exists(args.quant_ckpt):
+         print("Enabling quantization with Lightning checkpoint...")
+         pipe.enable_quantize(
+             dit_quantized=True, 
+             dit_quantized_ckpt=args.quant_ckpt, 
+             quant_scheme="fp8-sgl"
+         )
+    else:
+        print(f"Warning: Quantized checkpoint not found at {args.quant_ckpt}. Running in standard mode (slower).")
 
     # Determine Attention Mode
     attn_mode = get_attn_mode()

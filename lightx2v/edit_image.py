@@ -27,9 +27,13 @@ def get_attn_mode():
 
 def main():
     parser = argparse.ArgumentParser(description="LightX2V Qwen Image Edit (I2I) with JSON Input")
-    parser.add_argument("--json", type=str, required=True, help="Path to JSON input file (structure: {'prompt': str, 'images': [path1, path2]})")
+    parser.add_argument("--json", type=str, required=True, help="Path to JSON input file")
     parser.add_argument("--output_dir", type=str, default=".", help="Directory to save outputs")
-    parser.add_argument("--model_path", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511-Lightning", help="Path to Qwen model")
+    
+    # Model Paths
+    parser.add_argument("--model_path", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511", help="Path to Base Qwen Model")
+    parser.add_argument("--quant_ckpt", type=str, default="/workspace/LightX2V/models/Qwen/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors", help="Path to Quantized Checkpoint")
+    
     parser.add_argument("--steps", type=int, default=4, help="Inference steps")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
 
@@ -67,14 +71,13 @@ def main():
         task="i2i",
     )
 
-    if "Lightning" in args.model_path:
-        ckpt_path = os.path.join(args.model_path, "Qwen-quant/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors")
-        if os.path.exists(ckpt_path):
-             pipe.enable_quantize(
-                 dit_quantized=True, 
-                 dit_quantized_ckpt=ckpt_path, 
-                 quant_scheme="fp8-sgl"
-             )
+    if args.quant_ckpt and os.path.exists(args.quant_ckpt):
+         print("Enabling quantization...")
+         pipe.enable_quantize(
+             dit_quantized=True, 
+             dit_quantized_ckpt=args.quant_ckpt, 
+             quant_scheme="fp8-sgl"
+         )
 
     # Determine Attention Mode
     attn_mode = get_attn_mode()
@@ -96,12 +99,6 @@ def main():
         out_path = get_unique_filename(img_path, args.output_dir)
         
         print(f"Processing {img_path} -> {out_path}")
-        
-        # Use a new random seed for each image if no FIXED seed was provided?
-        # Typically if a user provides a seed, they want reproducibility. 
-        # If they didn't, we might want variation.
-        # But for editing, usually we want consistent application of the prompt.
-        # Let's stick to the generated 'seed' variable (either user-provided or random-once).
         
         pipe.generate(
             seed=seed,
