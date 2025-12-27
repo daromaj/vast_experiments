@@ -140,6 +140,19 @@ if [ -f "$RUN_SCRIPT" ]; then
     # Verify the change
     grep "lightx2v_path=" "$RUN_SCRIPT"
     grep "model_path=" "$RUN_SCRIPT"
+
+    # Patch gradio_demo.py to fix KeyError: 'target_height'
+    # The wan_runner expects target_height and target_width in config, but gradio_demo.py doesn't provide them.
+    # We inject them into config_graio based on the resolution argument.
+    GRADIO_DEMO="$LIGHTX2V_DIR/app/gradio_demo.py"
+    if [ -f "$GRADIO_DEMO" ]; then
+        echo "Patching $GRADIO_DEMO to fix resolution config..."
+        # Insert target_height and target_width mapping into config_graio
+        sed -i '/"t5_lazy_load": lazy_load,/a \        "target_height": {"480p": 480, "540p": 540, "720p": 720}.get(resolution, 480),\n        "target_width": {"480p": 832, "540p": 960, "720p": 1280}.get(resolution, 832),' "$GRADIO_DEMO"
+        echo "Patched $GRADIO_DEMO"
+    else
+        echo "Warning: $GRADIO_DEMO not found!"
+    fi
 else
     echo "Warning: $RUN_SCRIPT not found!"
 fi
