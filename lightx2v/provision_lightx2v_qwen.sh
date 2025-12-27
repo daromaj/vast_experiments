@@ -98,9 +98,25 @@ huggingface-cli download --resume-download Qwen/Qwen-Image --local-dir "$QWEN_MO
 echo "[$(date)] Downloading Qwen-Image-Edit-2511..."
 huggingface-cli download --resume-download Qwen/Qwen-Image-Edit-2511 --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511"
 
+
 # 4.3 (Optional) Qwen-Image-Edit-2511-Lightning (FP8/Distilled)
 echo "[$(date)] Downloading Qwen-Image-Edit-2511-Lightning (Accelerated)..."
 huggingface-cli download --resume-download lightx2v/Qwen-Image-Edit-2511-Lightning --local-dir "$QWEN_MODELS_DIR/Qwen-Image-Edit-2511-Lightning"
 
+
+# 5. DOWNLOAD EXAMPLE SCRIPTS
+echo "[$(date)] Downloading example scripts..."
+SCRIPTS_DIR="$LIGHTX2V_DIR/examples/qwen_custom"
+mkdir -p "$SCRIPTS_DIR"
+
+# Raw URLs for the scripts
+GEN_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/generate_image.py"
+EDIT_SCRIPT_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/master/lightx2v/edit_image.py"
+
+echo "Downloading generate_image.py..."
+wget -O "$SCRIPTS_DIR/generate_image.py" "$GEN_SCRIPT_URL"
+
+echo "Downloading edit_image.py..."
+wget -O "$SCRIPTS_DIR/edit_image.py" "$EDIT_SCRIPT_URL"
 
 echo "[$(date)] Provisioning Complete!"
