@@ -124,37 +124,22 @@ hf download lightx2v/Autoencoders --local-dir "$MODELS_DIR"
 echo "[$(date)] Configuring startup script..."
 RUN_SCRIPT="$LIGHTX2V_DIR/app/run_gradio.sh"
 
-# We need to set lightx2v_path and model_path in the script
-# The script likely has placeholders or variables at the top.
-# Let's assume standard bash variable assignment structure or just append/replace.
-# Since we don't know the exact content of run_gradio.sh, we'll append the variables 
-# to the top of the file (after shebang) or use sed if we can guess the structure.
-# A safer bet based on the instructions "Edit the startup script" is to create a wrapper 
-# or try to replace known lines.
-# The instructions say:
-# # Configuration items that need to be modified:
-# # - lightx2v_path: Lightx2v project root directory path
-# # - model_path: Model root directory path (contains all model files)
-
-# Let's try to sed replace if they exist, or just prepend them.
-# However, if they are defined later in the file, prepending might not work if they are overwritten.
-# Let's look at the file content first? No, I can't see it yet as I haven't cloned it.
-# I'll assume they are defined as `lightx2v_path="..."` or similar.
-# I will use a heuristic to replace them.
-
 if [ -f "$RUN_SCRIPT" ]; then
     # Create a backup
     cp "$RUN_SCRIPT" "${RUN_SCRIPT}.bak"
     
-    # Attempt to replace empty or placeholder paths
-    # We'll just force set them at the beginning of the script (after shebang)
-    # This is usually safe for bash scripts unless they are readonly variables (unlikely).
+    # Use sed to replace existing variable definitions
+    # Matches lines starting with optional whitespace/comment, then variable name, then =
+    # We use | as delimiter to avoid issues with path slashes
+    sed -i "s|^[#[:space:]]*lightx2v_path=.*|lightx2v_path='$LIGHTX2V_DIR'|" "$RUN_SCRIPT"
+    sed -i "s|^[#[:space:]]*model_path=.*|model_path='$MODELS_DIR'|" "$RUN_SCRIPT"
     
-    # Insert variables after the first line
-    sed -i "1a lightx2v_path='$LIGHTX2V_DIR'" "$RUN_SCRIPT"
-    sed -i "1a model_path='$MODELS_DIR'" "$RUN_SCRIPT"
-    
+    chmod +x "$RUN_SCRIPT"
     echo "Modified $RUN_SCRIPT to set paths."
+    
+    # Verify the change
+    grep "lightx2v_path=" "$RUN_SCRIPT"
+    grep "model_path=" "$RUN_SCRIPT"
 else
     echo "Warning: $RUN_SCRIPT not found!"
 fi
@@ -162,7 +147,3 @@ fi
 echo "[$(date)] Provisioning Complete!"
 echo "To start Gradio, run:"
 echo "cd $LIGHTX2V_DIR/app && bash run_gradio.sh --lang en --port 7862"
-
-# Optional: Auto-start (commented out by default to allow user to check logs first)
-# cd "$LIGHTX2V_DIR/app"
-# bash run_gradio.sh --lang en --port 7862
