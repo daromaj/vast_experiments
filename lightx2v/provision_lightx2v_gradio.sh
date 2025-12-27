@@ -32,7 +32,10 @@ apt-get install -y aria2 git nano ffmpeg libgl1-mesa-glx libglib2.0-0 build-esse
 echo "[$(date)] Installing Python dependencies..."
 
 # Ensure uv is installed
-pip install uv huggingface_hub
+pip install uv huggingface_hub[cli] hf_transfer
+
+# Enable hf_transfer for faster downloads
+export HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Install server dependencies (if needed, though Gradio is the main one here)
 # The repo requirements likely handle most, but we'll install the optimized kernels explicitly as requested.
