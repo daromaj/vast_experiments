@@ -145,5 +145,10 @@ else
 fi
 
 echo "[$(date)] Provisioning Complete!"
-echo "To start Gradio, run:"
-echo "cd $LIGHTX2V_DIR/app && bash run_gradio.sh --lang en --port 7862"
+# 6. START SERVER
+echo "[$(date)] Starting Gradio Server..."
+cd "$LIGHTX2V_DIR/app"
+# Start in background with nohup so it persists after script finishes
+nohup bash run_gradio.sh --lang en --port 7862 > /workspace/gradio.log 2>&1 &
+echo "[$(date)] Gradio server started in background. Logs at /workspace/gradio.log"
+echo "Access at http://<instance-ip>:7862"
