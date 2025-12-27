@@ -61,4 +61,4 @@ curl -X POST "http://localhost:8000/edit" \
 ### Hardware Requirements
 - **GPU:** NVIDIA GPU with **≥32GB VRAM** (Required for running the full model with offloading)
 - **RAM:** ≥64GB Recommended (to hold offloaded weights)
-- **Disk:** ≥100GB (Model is ~55GB, plus dependencies)
+- **Disk:** ≥100GB (Model is ~58GB, plus dependencies and system overhead)
