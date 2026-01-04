@@ -14,6 +14,12 @@
 # - Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors: ~15.83 GB
 # - MelBandRoformer_fp16.safetensors: ~435 MB
 #
+# Monitor Output:
+# The script provides download progress in two formats every 10 seconds:
+# 1. Human Readable: [PROGRESS] <Downloaded>GB / <Total>GB (<Percent>%) | Speed: <Speed>MB/s | ETA: <Min>m <Sec>s
+# 2. Machine Readable: [PROG_DATA] JSON_OBJECT
+#    JSON Schema: {"downloaded_bytes": int, "total_bytes": int, "percentage": int, "speed_bps": int, "eta_seconds": int, "elapsed_seconds": int}
+#
 
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
