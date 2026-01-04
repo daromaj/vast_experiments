@@ -197,6 +197,7 @@ function provisioning_monitor_loop() {
         local current_gb=$(echo "scale=2; $current_bytes/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local total_gb=$(echo "scale=2; $TOTAL_BYTES_TO_DOWNLOAD/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local speed_mb=$(echo "scale=2; $speed/1024/1024" | bc 2>/dev/null || echo "0")
+        local eta_min=$((eta / 60))
         local eta_sec=$((eta % 60))
         local elapsed_min=$((elapsed / 60))
         local elapsed_sec=$((elapsed % 60))
