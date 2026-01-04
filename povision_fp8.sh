@@ -24,8 +24,9 @@
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
 TOTAL_BYTES_TO_DOWNLOAD=40513115852
+MIN_SETUP_TIME=240  # Minimum 4 minutes for nodes + SageAttention build
 
-APT_PACKAGES=(aria2)
+APT_PACKAGES=(aria2 bc)
 PIP_PACKAGES=(
 )
 NODES=(
@@ -114,9 +115,6 @@ function provisioning_start() {
 
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
 
-    # Kill monitor loop
-    kill $MONITOR_PID 2>/dev/null
-
     # Wait for Setup (Nodes + SageAttention) to complete
     echo "Waiting for background setup (Nodes + SageAttention) to complete..."
     wait $SETUP_PID
@@ -126,6 +124,9 @@ function provisioning_start() {
     else
         echo "Background setup completed successfully"
     fi
+
+    # Kill monitor loop
+    kill $MONITOR_PID 2>/dev/null
 
     provisioning_print_end "$provisioning_start_time"
 }
@@ -171,9 +172,25 @@ function provisioning_monitor_loop() {
         
         # Calculate ETA
         local eta=0
+        local eta_msg=""
+        
+        # 1. Download ETA
+        local download_eta=0
         local remaining_bytes=$((TOTAL_BYTES_TO_DOWNLOAD - current_bytes))
         if [[ $speed -gt 0 ]]; then
-            eta=$((remaining_bytes / speed))
+            download_eta=$((remaining_bytes / speed))
+        fi
+        
+        # 2. Setup ETA (minimum run time check)
+        local setup_eta=$((MIN_SETUP_TIME - elapsed))
+        [[ $setup_eta -lt 0 ]] && setup_eta=0
+        
+        # 3. Final ETA is max of both
+        if [[ $download_eta -ge $setup_eta ]]; then
+            eta=$download_eta
+        else
+            eta=$setup_eta
+            eta_msg=" (Setup)"
         fi
         
         # Format for display
@@ -184,7 +201,7 @@ function provisioning_monitor_loop() {
         local eta_sec=$((eta % 60))
 
         # Human Friendly Output
-        echo "[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s"
+        echo -e "\n[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s${eta_msg}"
         
         # Machine Friendly Output (JSON)
         echo "[PROG_DATA] {\"downloaded_bytes\": $current_bytes, \"total_bytes\": $TOTAL_BYTES_TO_DOWNLOAD, \"percentage\": $percent, \"speed_bps\": $speed, \"eta_seconds\": $eta, \"elapsed_seconds\": $elapsed}"
