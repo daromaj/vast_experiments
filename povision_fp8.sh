@@ -1,7 +1,23 @@
 #!/bin/bash
+# 
+# Provisioning script for Vast.ai FP8 ComfyUI environment.
+# Sets up ComfyUI, installs custom nodes, downloads models (with progress monitoring), and compiles SageAttention.
+#
+# Total Download Size: ~37.7 GB
+# Key Model Sizes:
+# - Wan2_1_VAE_bf16.safetensors: ~242 MB
+# - clip_vision_h.safetensors: ~1.18 GB
+# - lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors: ~703 MB
+# - umt5-xxl-enc-bf16.safetensors: ~10.58 GB
+# - umt5-xxl-enc-fp8_e4m3fn.safetensors: ~6.27 GB
+# - Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors: ~2.53 GB
+# - Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors: ~15.83 GB
+# - MelBandRoformer_fp16.safetensors: ~435 MB
+#
 
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
+TOTAL_BYTES_TO_DOWNLOAD=40513115852
 
 APT_PACKAGES=(aria2)
 PIP_PACKAGES=(
@@ -56,6 +72,7 @@ function provisioning_start() {
     # Setup logging
     LOG_FILE="${WORKSPACE}/provisioning.log"
     exec > >(tee -a "$LOG_FILE") 2>&1
+    local provisioning_start_time=$(date +%s)
     echo "[$(date)] Starting provisioning..."
 
     # Pre-flight check for aria2c
@@ -73,6 +90,10 @@ function provisioning_start() {
     { provisioning_install_sageattention_source 2>&1 | sed 's/^/[SAGE] /'; } &
     SAGE_BUILD_PID=$!
 
+    # Start Download Monitoring in background
+    provisioning_monitor_loop &
+    MONITOR_PID=$!
+
     workflows_dir="${COMFYUI_DIR}/user/default/workflows"
     mkdir -p "${workflows_dir}"
     provisioning_get_files "${workflows_dir}" "${WORKFLOWS[@]}"
@@ -85,6 +106,9 @@ function provisioning_start() {
 
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
 
+    # Kill monitor loop
+    kill $MONITOR_PID 2>/dev/null
+
     # Wait for SageAttention build to complete before finishing provisioning
     echo "Waiting for SageAttention build to complete..."
     wait $SAGE_BUILD_PID
@@ -95,7 +119,70 @@ function provisioning_start() {
         echo "SageAttention build completed successfully"
     fi
 
-    provisioning_print_end
+    provisioning_print_end "$provisioning_start_time"
+}
+
+function provisioning_monitor_loop() {
+    local start_time=$(date +%s)
+    local interval=10
+    local last_bytes=0
+    
+    # Wait a bit for folders to be created
+    sleep 5
+
+    while true; do
+        # Calculate current size of models directory (where most large files go)
+        # Using -s for summary, -b for bytes. 
+        # Check specific directories to be accurate or just ComfyUI/models
+        # Models are scattered, but mostly in models/
+        if [[ -d "${COMFYUI_DIR}/models" ]]; then
+            local current_bytes=$(du -sb "${COMFYUI_DIR}/models" 2>/dev/null | awk '{print $1}')
+        else
+            local current_bytes=0
+        fi
+        
+        # Default to 0 if du fails
+        [[ -z "$current_bytes" ]] && current_bytes=0
+
+        # Calculate metrics
+        local now=$(date +%s)
+        local elapsed=$((now - start_time))
+        [[ $elapsed -eq 0 ]] && elapsed=1
+        
+        local percent=0
+        if [[ $TOTAL_BYTES_TO_DOWNLOAD -gt 0 ]]; then
+            percent=$((current_bytes * 100 / TOTAL_BYTES_TO_DOWNLOAD))
+        fi
+        
+        # Calculate Speed (bytes per second)
+        # Using simple average over total time for stability, or could do delta
+        # Let's do delta for more real-time feel
+        local speed=0
+        # For simplicity in bash, just use average speed so far to avoid jumpiness
+        speed=$((current_bytes / elapsed))
+        
+        # Calculate ETA
+        local eta=0
+        local remaining_bytes=$((TOTAL_BYTES_TO_DOWNLOAD - current_bytes))
+        if [[ $speed -gt 0 ]]; then
+            eta=$((remaining_bytes / speed))
+        fi
+        
+        # Format for display
+        local current_gb=$(echo "scale=2; $current_bytes/1024/1024/1024" | bc 2>/dev/null || echo "0")
+        local total_gb=$(echo "scale=2; $TOTAL_BYTES_TO_DOWNLOAD/1024/1024/1024" | bc 2>/dev/null || echo "0")
+        local speed_mb=$(echo "scale=2; $speed/1024/1024" | bc 2>/dev/null || echo "0")
+        local eta_min=$((eta / 60))
+        local eta_sec=$((eta % 60))
+
+        # Human Friendly Output
+        echo "[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s"
+        
+        # Machine Friendly Output (JSON)
+        echo "[PROG_DATA] {\"downloaded_bytes\": $current_bytes, \"total_bytes\": $TOTAL_BYTES_TO_DOWNLOAD, \"percentage\": $percent, \"speed_bps\": $speed, \"eta_seconds\": $eta, \"elapsed_seconds\": $elapsed}"
+
+        sleep $interval
+    done
 }
 
 function provisioning_get_apt_packages() {
@@ -128,6 +215,7 @@ function provisioning_install_sageattention() {
 }
 
 function provisioning_install_sageattention_source() {
+    local start_time=$(date +%s)
     # Builds SageAttention from source with parallel compilation
     # Additionally builds sageattention3_blackwell if running on a 5090 GPU
     echo "Building SageAttention from source..."
@@ -167,7 +255,11 @@ function provisioning_install_sageattention_source() {
         echo "Non-Blackwell GPU detected - skipping sageattention3_blackwell build"
     fi
     
-    echo "SageAttention source build complete"
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "SageAttention source build complete. Duration: ${minutes}m ${seconds}s"
 }
 
 function provisioning_get_nodes() {
@@ -212,7 +304,13 @@ function provisioning_print_header() {
 }
 
 function provisioning_print_end() {
-    echo -e "\\nProvisioning complete: Application will start now\\n"
+    local start_time="$1"
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo -e "\\nProvisioning complete: Application will start now"
+    echo -e "Total provisioning time: ${minutes}m ${seconds}s\\n"
 }
 
 function provisioning_download() {
@@ -230,18 +328,15 @@ function provisioning_download() {
     fi
 
     # Use aria2c with optimal settings (16 parallel connections, auto-resume)
-    # -o: Explicit output filename to avoid hash-based names
-    # --summary-interval=10: Show progress every 10 seconds (default is 60)
-    # --console-log-level=notice: Show download progress and errors
-    # --allow-overwrite=true: Allow overwriting existing files
-    # --auto-file-renaming=false: Don't rename files automatically
+    # --file-allocation=none: Required for accurate disk usage monitoring during download
+    # --summary-interval=0: Suppress aria2c native progress summary to avoid clutter
     if [[ -n $auth_header ]]; then
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
-            --allow-overwrite=true --auto-file-renaming=false \
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
             -o "$filename" $auth_header -d "$dir" "$url"
     else
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
-            --allow-overwrite=true --auto-file-renaming=false \
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
             -o "$filename" -d "$dir" "$url"
     fi
 
