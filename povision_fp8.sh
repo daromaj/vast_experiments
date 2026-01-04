@@ -24,7 +24,7 @@
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
 TOTAL_BYTES_TO_DOWNLOAD=40513115852
-MIN_SETUP_TIME=240  # Minimum 4 minutes for nodes + SageAttention build
+MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
 APT_PACKAGES=(aria2 bc)
 PIP_PACKAGES=(
@@ -267,19 +267,19 @@ function provisioning_install_sageattention_source() {
     ( cd "$sage_dir" && python setup.py install )
     
     # Check if running on Blackwell (5090) GPU and build sageattention3 if so
-    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
-        echo "Blackwell GPU (5090) detected - building sageattention3_blackwell..."
-        local blackwell_dir="${sage_dir}/sageattention3_blackwell"
-        if [[ -d "$blackwell_dir" ]]; then
-            # doesn't seem to help with speed for now
-            # ( cd "$blackwell_dir" && python setup.py install )
-            echo "sageattention3_blackwell installed successfully"
-        else
-            echo "WARNING: sageattention3_blackwell directory not found at $blackwell_dir"
-        fi
-    else
-        echo "Non-Blackwell GPU detected - skipping sageattention3_blackwell build"
-    fi
+    # if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
+    #     echo "Blackwell GPU (5090) detected - building sageattention3_blackwell..."
+    #     local blackwell_dir="${sage_dir}/sageattention3_blackwell"
+    #     if [[ -d "$blackwell_dir" ]]; then
+    #         # doesn't seem to help with speed for now
+    #         # ( cd "$blackwell_dir" && python setup.py install )
+    #         echo "sageattention3_blackwell installed successfully"
+    #     else
+    #         echo "WARNING: sageattention3_blackwell directory not found at $blackwell_dir"
+    #     fi
+    # else
+    #     echo "Non-Blackwell GPU detected - skipping sageattention3_blackwell build"
+    # fi
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
