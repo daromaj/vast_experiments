@@ -16,7 +16,7 @@
 #
 # Monitor Output:
 # The script provides download progress in two formats every 10 seconds:
-# 1. Human Readable: [PROGRESS] <Downloaded>GB / <Total>GB (<Percent>%) | Speed: <Speed>MB/s | ETA: <Min>m <Sec>s
+# 1. Human Readable: [PROGRESS] <Downloaded>GB / <Total>GB (<Percent>%) | Elapsed: <Min>m <Sec>s | Speed: <Speed>MB/s | ETA: <Min>m <Sec>s
 # 2. Machine Readable: [PROG_DATA] JSON_OBJECT
 #    JSON Schema: {"downloaded_bytes": int, "total_bytes": int, "percentage": int, "speed_bps": int, "eta_seconds": int, "elapsed_seconds": int}
 #
@@ -197,11 +197,12 @@ function provisioning_monitor_loop() {
         local current_gb=$(echo "scale=2; $current_bytes/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local total_gb=$(echo "scale=2; $TOTAL_BYTES_TO_DOWNLOAD/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local speed_mb=$(echo "scale=2; $speed/1024/1024" | bc 2>/dev/null || echo "0")
-        local eta_min=$((eta / 60))
         local eta_sec=$((eta % 60))
+        local elapsed_min=$((elapsed / 60))
+        local elapsed_sec=$((elapsed % 60))
 
         # Human Friendly Output
-        echo -e "\n[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s${eta_msg}"
+        echo -e "\n[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Elapsed: ${elapsed_min}m ${elapsed_sec}s | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s${eta_msg}"
         
         # Machine Friendly Output (JSON)
         echo "[PROG_DATA] {\"downloaded_bytes\": $current_bytes, \"total_bytes\": $TOTAL_BYTES_TO_DOWNLOAD, \"percentage\": $percent, \"speed_bps\": $speed, \"eta_seconds\": $eta, \"elapsed_seconds\": $elapsed}"
