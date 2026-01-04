@@ -88,13 +88,15 @@ function provisioning_start() {
 
     provisioning_print_header
     provisioning_get_apt_packages
-    provisioning_get_nodes
     provisioning_get_pip_packages
-    # provisioning_install_sageattention  # Disabled: using source build instead
-    # Start SageAttention build in background (CPU/GPU compilation) while downloads run (network I/O)
-    # Output is prefixed with [SAGE] to distinguish from download progress
-    { provisioning_install_sageattention_source 2>&1 | sed 's/^/[SAGE] /'; } &
-    SAGE_BUILD_PID=$!
+
+    # Start Setup (Nodes + SageAttention) in background
+    # Runs sequentially to avoid pip conflicts, but concurrently with downloads
+    { 
+        { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } && \
+        { provisioning_install_sageattention_source 2>&1 | sed 's/^/[SAGE] /'; }
+    } &
+    SETUP_PID=$!
 
     # Start Download Monitoring in background
     provisioning_monitor_loop &
@@ -115,14 +117,14 @@ function provisioning_start() {
     # Kill monitor loop
     kill $MONITOR_PID 2>/dev/null
 
-    # Wait for SageAttention build to complete before finishing provisioning
-    echo "Waiting for SageAttention build to complete..."
-    wait $SAGE_BUILD_PID
-    SAGE_EXIT_CODE=$?
-    if [[ $SAGE_EXIT_CODE -ne 0 ]]; then
-        echo "WARNING: SageAttention build failed with exit code $SAGE_EXIT_CODE - check logs above"
+    # Wait for Setup (Nodes + SageAttention) to complete
+    echo "Waiting for background setup (Nodes + SageAttention) to complete..."
+    wait $SETUP_PID
+    SETUP_EXIT_CODE=$?
+    if [[ $SETUP_EXIT_CODE -ne 0 ]]; then
+        echo "WARNING: Background setup failed with exit code $SETUP_EXIT_CODE - check logs above"
     else
-        echo "SageAttention build completed successfully"
+        echo "Background setup completed successfully"
     fi
 
     provisioning_print_end "$provisioning_start_time"
@@ -269,6 +271,7 @@ function provisioning_install_sageattention_source() {
 }
 
 function provisioning_get_nodes() {
+    local start_time=$(date +%s)
     for repo in "${NODES[@]}"; do
         dir="${repo##*/}"
         path="${COMFYUI_DIR}/custom_nodes/${dir}"
@@ -285,6 +288,11 @@ function provisioning_get_nodes() {
             [[ -e $requirements ]] && pip install --no-cache-dir -r "$requirements"
         fi
     done
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "Nodes installation complete. Duration: ${minutes}m ${seconds}s"
 }
 
 function provisioning_get_files() {
