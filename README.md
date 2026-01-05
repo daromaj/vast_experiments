@@ -159,16 +159,49 @@ pip wheel . --no-deps -w dist/
 
 
 
-5s
+---
+# audio 5s
 
-5090
-sage attention 2
+## 5090 PCIE 4.0/16x
+sage attention 2 (~6-7s per it)
 <102s
-flash attention
+flash attention (~8-9s per it)
 <116s
 
-4090
-sage attention 2
-<102s
-flash attention
-<116s
+# audio 58s - 21 windows
+
+## 5090
+
+sage attention 2 (~6-7s per it) 34s per window
+~12m
+flash attention (~8-9s per it) 49s per window + ~5s rest
+18:20
+
+## 4090 PCIE 4.0/16x
+sage attention 2 (~7-12s per it) 46s per window
+18:45
+
+flash attention (~11-15s per it) 1:09 per window + ~15s rest
+26:14
+~24:30
+
+## 5090
+[FLASH] Flash Attention installation complete. Duration: 0m 19s
+[SAGE_INSTALL] SageAttention installation complete. Duration: 2m 51s
+
+## 4090
+[FLASH] Flash Attention installation complete. Duration: 3m 42s
+[FLASH] Flash Attention installation complete. Duration: 0m 36s
+[SAGE_BUILD] SageAttention build complete. Duration: 4m 32s
+[SAGE_INSTALL] SageAttention installation complete. Duration: 0m 3s
+
+--- download examples
+[PROGRESS] 37.73GB / 37.73GB (100%) | Elapsed: 2m 5s | Speed: 309.09MB/s | ETA: 3m 55s (Setup)
+
+-- download around 100Mb/s
+[PROGRESS] 37.73GB / 37.73GB (100%) | Elapsed: 7m 47s | Speed: 82.73MB/s | ETA: 0m 0s
+[PROGRESS] 37.73GB / 37.73GB (100%) | Elapsed: 8m 47s | Speed: 73.31MB/s | ETA: 0m 0s
+
+
+++ instance creation time !!! 1m is acceptable and expected
+total expected time - around 25 minutes for 4090 and 20m for 5090

@@ -105,10 +105,7 @@ function provisioning_start() {
     { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
     SAGE_PID=$!
     
-    { 
-        { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } && \
-        { provisioning_install_flash_attn 2>&1 | sed 's/^/[FLASH] /'; }
-    } &
+    { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } &
     NODES_PID=$!
     
 
