@@ -91,17 +91,27 @@ function provisioning_start() {
     provisioning_get_apt_packages
     provisioning_get_pip_packages
 
-    # Start Setup (Nodes + SageAttention) in background
-    # Runs sequentially to avoid pip conflicts, but concurrently with downloads
-    { 
-        { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } && \
-        { provisioning_install_sageattention_source 2>&1 | sed 's/^/[SAGE] /'; }
-    } &
-    SETUP_PID=$!
+
 
     # Start Download Monitoring in background
     provisioning_monitor_loop &
     MONITOR_PID=$!
+
+    # Start Parallel Operations
+    # 1. Build SageAttention (CPU intensive, no pip lock)
+    # 2. Setup Nodes (Network/Disk intensive, locks pip)
+    echo "Starting parallel setup: SageAttention Build + Node Installation..."
+    
+    { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
+    SAGE_PID=$!
+    
+    { 
+        { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } && \
+        { provisioning_install_flash_attn 2>&1 | sed 's/^/[FLASH] /'; }
+    } &
+    NODES_PID=$!
+    
+
 
     workflows_dir="${COMFYUI_DIR}/user/default/workflows"
     mkdir -p "${workflows_dir}"
@@ -115,14 +125,20 @@ function provisioning_start() {
 
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
 
-    # Wait for Setup (Nodes + SageAttention) to complete
-    echo "Waiting for background setup (Nodes + SageAttention) to complete..."
-    wait $SETUP_PID
-    SETUP_EXIT_CODE=$?
-    if [[ $SETUP_EXIT_CODE -ne 0 ]]; then
-        echo "WARNING: Background setup failed with exit code $SETUP_EXIT_CODE - check logs above"
+    # Wait for both background processes
+    echo "Waiting for background setup (SageAttention Build + Nodes) to complete..."
+    wait $SAGE_PID
+    local sage_status=$?
+    
+    wait $NODES_PID
+    local nodes_status=$?
+    
+    if [[ $sage_status -eq 0 && $nodes_status -eq 0 ]]; then
+        echo "Parallel setup complete. Installing SageAttention..."
+        # Quick install step now that build is done and pip is free
+        { provisioning_install_sageattention 2>&1 | sed 's/^/[SAGE_INSTALL] /'; }
     else
-        echo "Background setup completed successfully"
+        echo "WARNING: One or more setup tasks failed (Sage: $sage_status, Nodes: $nodes_status)"
     fi
 
     # Kill monitor loop
@@ -226,7 +242,7 @@ function provisioning_get_pip_packages() {
     fi
 }
 
-function provisioning_install_sageattention() {
+function provisioning_install_sageattention_deprecated() {
     # DEPRECATED: Wheel-based installation - kept for reference
     echo "Installing SageAttention from wheel files..."
     local wheel_dir="${WORKSPACE}/wheels"
@@ -241,10 +257,9 @@ function provisioning_install_sageattention() {
     pip install --no-cache-dir "$wheel_dir"/*.whl
 }
 
-function provisioning_install_sageattention_source() {
+function provisioning_build_sageattention() {
     local start_time=$(date +%s)
     # Builds SageAttention from source with parallel compilation
-    # Additionally builds sageattention3_blackwell if running on a 5090 GPU
     echo "Building SageAttention from source..."
     
     local sage_dir="${WORKSPACE}/SageAttention"
@@ -263,30 +278,42 @@ function provisioning_install_sageattention_source() {
     export NVCC_APPEND_FLAGS="--threads 8"
     export MAX_JOBS=32
     
-    # Build and install main SageAttention package
-    echo "Installing SageAttention (this may take a while)..."
-    ( cd "$sage_dir" && python setup.py install )
-    
-    # Check if running on Blackwell (5090) GPU and build sageattention3 if so
-    # if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
-    #     echo "Blackwell GPU (5090) detected - building sageattention3_blackwell..."
-    #     local blackwell_dir="${sage_dir}/sageattention3_blackwell"
-    #     if [[ -d "$blackwell_dir" ]]; then
-    #         # doesn't seem to help with speed for now
-    #         # ( cd "$blackwell_dir" && python setup.py install )
-    #         echo "sageattention3_blackwell installed successfully"
-    #     else
-    #         echo "WARNING: sageattention3_blackwell directory not found at $blackwell_dir"
-    #     fi
-    # else
-    #     echo "Non-Blackwell GPU detected - skipping sageattention3_blackwell build"
-    # fi
+    # Build SageAttention (Compiles C++/CUDA extensions)
+    echo "Compiling SageAttention extensions..."
+    ( cd "$sage_dir" && python setup.py build )
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     local minutes=$((duration / 60))
     local seconds=$((duration % 60))
-    echo "SageAttention source build complete. Duration: ${minutes}m ${seconds}s"
+    echo "SageAttention build complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_install_sageattention() {
+    local start_time=$(date +%s)
+    echo "Installing SageAttention..."
+    
+    local sage_dir="${WORKSPACE}/SageAttention"
+    
+    # Install the pre-built package
+    ( cd "$sage_dir" && python setup.py install )
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "SageAttention installation complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_install_flash_attn() {
+    local start_time=$(date +%s)
+    echo "Installing flash-attn..."
+    pip install flash-attn --no-build-isolation
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "Flash Attention installation complete. Duration: ${minutes}m ${seconds}s"
 }
 
 function provisioning_get_nodes() {
