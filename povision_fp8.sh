@@ -296,7 +296,7 @@ function provisioning_install_sageattention() {
     local sage_dir="${WORKSPACE}/SageAttention"
     
     # Install the pre-built package
-    ( cd "$sage_dir" && python setup.py install )
+    ( cd "$sage_dir" && python setup.py install --skip-build )
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))

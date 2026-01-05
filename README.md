@@ -158,3 +158,17 @@ export SAG_VERSION_SUFFIX="+cu129"
 pip wheel . --no-deps -w dist/
 
 
+
+5s
+
+5090
+sage attention 2
+<102s
+flash attention
+<116s
+
+4090
+sage attention 2
+<102s
+flash attention
+<116s
