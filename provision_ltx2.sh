@@ -53,6 +53,7 @@ CHECKPOINTS=(
 # Text Encoders (T5 is usually required for LTX2 if not baked in)
 TEXT_ENCODERS=(
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+    "https://huggingface.co/city96/Gemma-3-12B-it-gguf/resolve/main/gemma-3-12b-it-fp8-scaled.safetensors"
 )
 
 # Audio Models
