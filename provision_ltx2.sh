@@ -40,7 +40,96 @@ NODES=(
     "https://github.com/Lightricks/ComfyUI-LTXVideo"
 )
 
-# ... (Checkpoints/Models sections remain unchanged) ...
+
+WORKFLOWS=(
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/LTX2-I2V-Audio.json"
+)
+
+# LTX-2 Checkpoints
+CHECKPOINTS=(
+    "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors"
+)
+
+# Text Encoders (T5 is usually required for LTX2 if not baked in)
+TEXT_ENCODERS=(
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+)
+
+# Audio Models
+DIFFUSION_MODELS=(
+    "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/6251b3a2bd544aaa31400138e55abda4722735cc/MelBandRoformer_fp16.safetensors"
+)
+
+# LoRAs including Detailer and Camera Control
+LORAS=(
+    "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors"
+    "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors"
+    "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In/resolve/main/ltx-2-19b-lora-camera-control-dolly-in.safetensors"
+)
+
+SAGEATTENTION_WHEELS=(
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattn3-1.0.0-cp312-cp312-linux_x86_64.whl"
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
+)
+
+function provisioning_start() {
+    # Setup logging
+    LOG_FILE="${WORKSPACE}/provisioning.log"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    local provisioning_start_time=$(date +%s)
+    echo "[$(date)] Starting provisioning..."
+
+    # Pre-flight check for aria2c
+    if ! command -v aria2c &> /dev/null; then
+        echo "NOTICE: aria2c not found - will be installed via APT_PACKAGES"
+    fi
+
+    provisioning_print_header
+    provisioning_get_apt_packages
+    provisioning_get_pip_packages
+
+    # Start Download Monitoring in background
+    provisioning_monitor_loop &
+    MONITOR_PID=$!
+
+    # Start Parallel Operations
+    # 1. Build SageAttention (CPU intensive, no pip lock)
+    # 2. Setup Nodes (Network/Disk intensive, locks pip)
+    echo "Starting parallel setup: SageAttention Build + Node Installation..."
+    
+    { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
+    SAGE_PID=$!
+    
+    { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } &
+    NODES_PID=$!
+
+    # Download Models and Workflows
+    workflows_dir="${COMFYUI_DIR}/user/default/workflows"
+    mkdir -p "${workflows_dir}"
+    provisioning_get_files "${workflows_dir}" "${WORKFLOWS[@]}"
+    
+    provisioning_get_files "${COMFYUI_DIR}/models/checkpoints" "${CHECKPOINTS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/text_encoders" "${TEXT_ENCODERS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/diffusion_models" "${DIFFUSION_MODELS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/loras" "${LORAS[@]}"    
+
+    # Wait for both background processes
+    echo "Waiting for background setup (SageAttention Build + Nodes) to complete..."
+    wait $SAGE_PID
+    local sage_status=$?
+    
+    wait $NODES_PID
+    local nodes_status=$?
+    
+    if [[ $sage_status -eq 0 && $nodes_status -eq 0 ]]; then
+        echo "Parallel setup complete. Installing SageAttention..."
+        # Quick install step now that build is done and pip is free
+        { provisioning_install_sageattention 2>&1 | sed 's/^/[SAGE_INSTALL] /'; }
+    else
+        echo "WARNING: One or more setup tasks failed (Sage: $sage_status, Nodes: $nodes_status)"
+    fi
+
 
     # Check for ComfyUI update logic (optional but recommended)
     echo "Updating ComfyUI..."
