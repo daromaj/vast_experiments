@@ -313,6 +313,26 @@ function provisioning_install_flash_attn() {
     echo "Flash Attention installation complete. Duration: ${minutes}m ${seconds}s"
 }
 
+function install_requirements() {
+    local requirements_file="$1"
+    if [[ -e "$requirements_file" ]]; then
+        echo "Installing requirements from $requirements_file"
+        # Try uv pip install first
+        if command -v uv &> /dev/null; then
+            echo "Using uv for dependency installation..."
+            if uv pip install --no-cache-dir -r "$requirements_file"; then
+                echo "uv pip install succeeded"
+                return 0
+            else
+                echo "uv pip install failed, falling back to regular pip..."
+            fi
+        fi
+        # Fall back to regular pip
+        echo "Using regular pip for dependency installation..."
+        pip install --no-cache-dir -r "$requirements_file"
+    fi
+}
+
 function provisioning_get_nodes() {
     local start_time=$(date +%s)
     for repo in "${NODES[@]}"; do
@@ -323,12 +343,12 @@ function provisioning_get_nodes() {
             if [[ ${AUTO_UPDATE,,} != "false" ]]; then
                 echo "Updating node: ${repo}"
                 ( cd "$path" && git pull )
-                [[ -e $requirements ]] && pip install --no-cache-dir -r "$requirements"
+                install_requirements "$requirements"
             fi
         else
             echo "Downloading node: ${repo}"
             git clone "${repo}" "${path}" --recursive
-            [[ -e $requirements ]] && pip install --no-cache-dir -r "$requirements"
+            install_requirements "$requirements"
         fi
     done
     local end_time=$(date +%s)
