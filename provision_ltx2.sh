@@ -5,12 +5,12 @@
 #
 # Reference Tutorial: https://www.nextdiffusion.ai/tutorials/ltx2-image-to-video-with-custom-audio-comfyui
 #
-# Total Download Size: ~41.8 GB
+# Total Download Size: ~47.8 GB
 # Key Model Sizes:
 # - ltx-2-19b-dev-fp8.safetensors: ~25.2 GB
+# - gemma_3_12B_it_fp8_scaled.safetensors: ~12.3 GB
 # - MelBandRoformer_fp16.safetensors: ~435 MB
 # - ltx-2-19b-distilled-lora-384.safetensors: ~7.1 GB
-# - umt5-xxl-enc-fp8_e4m3fn.safetensors: ~6.3 GB
 # - ltx-2-19b-ic-lora-detailer.safetensors: ~2.4 GB
 # - ltx-2-19b-lora-camera-control-dolly-in.safetensors: ~312 MB
 #
@@ -24,7 +24,7 @@
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
 # Exact total bytes (LTX2 + Audio + LoRAs + Common encoders)
-TOTAL_BYTES_TO_DOWNLOAD=44885798434 # ~41.8 GB
+TOTAL_BYTES_TO_DOWNLOAD=51359899469 # ~47.8 GB
 MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
 APT_PACKAGES=(aria2 bc)
@@ -52,7 +52,6 @@ CHECKPOINTS=(
 
 # Text Encoders (T5 is usually required for LTX2 if not baked in)
 TEXT_ENCODERS=(
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
     "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors"
 )
 
