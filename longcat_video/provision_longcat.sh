@@ -167,17 +167,32 @@ function provisioning_install_sageattention() {
 function provisioning_download() {
     local url="$1"
     local dir="$2"
-    local filename
-    filename=$(basename "${url%%\?*}")
+    local filename="$3"
+    local auth_header=""
+
+    if [[ -z "$filename" ]]; then
+        filename=$(basename "${url%%\?*}")
+    fi
 
     if [[ -f "${dir}/${filename}" ]]; then
         echo "  Already downloaded: $filename"
         return
     fi
 
-    aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
-        --allow-overwrite=true --auto-file-renaming=false \
-        -o "$filename" -d "$dir" "$url"
+    # Detect HuggingFace URLs and add auth if token exists
+    if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
+        auth_header="--header=Authorization: Bearer $HF_TOKEN"
+    fi
+
+    if [[ -n $auth_header ]]; then
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
+            -o "$filename" $auth_header -d "$dir" "$url"
+    else
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
+            -o "$filename" -d "$dir" "$url"
+    fi
 }
 
 function provisioning_install_cache_dit() {
