@@ -21,7 +21,6 @@ APT_PACKAGES=(
 )
 
 PIP_PACKAGES=(
-    "huggingface_hub[hf]"
     uv
 )
 
@@ -29,8 +28,6 @@ function provisioning_start() {
     LOG_FILE="${WORKSPACE}/provisioning.log"
     exec > >(tee -a "$LOG_FILE") 2>&1
     echo "[$(date)] Starting LongCat-Video Avatar-1.5 provisioning..."
-
-    # hf_transfer deprecated, not needed for hf CLI
 
     provisioning_print_header
     provisioning_get_apt_packages
@@ -208,78 +205,59 @@ print('flashattn3 enabled, flashattn2 disabled')
 }
 
 function provisioning_download_models() {
-    echo "[$(date)] Downloading models..."
-    mkdir -p "${WEIGHTS_DIR}/LongCat-Video"
-    mkdir -p "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    echo "[$(date)] Downloading models (aria2c -x16 for all files)..."
+    mkdir -p "${WEIGHTS_DIR}/LongCat-Video"/{vae,text_encoder,tokenizer}
+    mkdir -p "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"/{base_model_int8,lora,scheduler,vocal_separator,whisper-large-v3}
 
-    # Use Python huggingface_hub API for directory downloads (handles shards, resuming)
-    # Sequential downloads to avoid HF lock contention
-    # aria2c used for single-file downloads where possible (VAE, LoRA, etc.)
+    HF_BASE="https://huggingface.co"
 
-    # Base model components: VAE, text_encoder (UMT5-XXL shards), tokenizer
-    # VAE is a single file — aria2c
-    echo "[$(date)] Downloading VAE (508 MB)..."
-    provisioning_download \
-        "https://huggingface.co/meituan-longcat/LongCat-Video/resolve/main/vae/diffusion_pytorch_model.safetensors" \
-        "${WEIGHTS_DIR}/LongCat-Video/vae"
-    provisioning_download \
-        "https://huggingface.co/meituan-longcat/LongCat-Video/resolve/main/vae/config.json" \
-        "${WEIGHTS_DIR}/LongCat-Video/vae"
+    # ===== LongCat-Video base =====
+    echo "[$(date)] VAE (508 MB)..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/vae/diffusion_pytorch_model.safetensors" "${WEIGHTS_DIR}/LongCat-Video/vae"
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/vae/config.json" "${WEIGHTS_DIR}/LongCat-Video/vae"
 
-    # Text encoder — multi-shard (5 files), use hf download for auto-discovery + resume
-    echo "[$(date)] Downloading text encoder / UMT5-XXL (9.6 GB, 5 shards)..."
-    hf download meituan-longcat/LongCat-Video \
-        text_encoder/ \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video"
+    echo "[$(date)] Text encoder / UMT5-XXL (5 shards, 9.6 GB)..."
+    for i in 01 02 03 04 05; do
+        provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/text_encoder/model-000${i}-of-00005.safetensors" "${WEIGHTS_DIR}/LongCat-Video/text_encoder" &
+    done
+    wait
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/text_encoder/model.safetensors.index.json" "${WEIGHTS_DIR}/LongCat-Video/text_encoder"
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/text_encoder/config.json" "${WEIGHTS_DIR}/LongCat-Video/text_encoder"
 
-    echo "[$(date)] Downloading tokenizer (21 MB)..."
-    hf download meituan-longcat/LongCat-Video \
-        tokenizer/ \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video"
+    echo "[$(date)] Tokenizer (21 MB)..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/tokenizer/spiece.model" "${WEIGHTS_DIR}/LongCat-Video/tokenizer"
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video/resolve/main/tokenizer/tokenizer_config.json" "${WEIGHTS_DIR}/LongCat-Video/tokenizer"
 
-    # Avatar-1.5 components
-    echo "[$(date)] Downloading INT8 DiT model (15.9 GB, 4 shards)..."
-    hf download meituan-longcat/LongCat-Video-Avatar-1.5 \
-        base_model_int8/ \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    # ===== Avatar-1.5 =====
+    echo "[$(date)] INT8 DiT (4 shards, 15.9 GB)..."
+    for i in 01 02 03 04; do
+        provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/base_model_int8/quantized_model-000${i}-of-00004.safetensors" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/base_model_int8" &
+    done
+    wait
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/base_model_int8/quantized_model.safetensors.index.json" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/base_model_int8"
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/base_model_int8/config.json" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/base_model_int8"
 
-    # LoRA is a single file — aria2c
-    echo "[$(date)] Downloading DMD LoRA (2.5 GB)..."
-    provisioning_download \
-        "https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/lora/dmd_lora.safetensors" \
-        "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/lora"
+    echo "[$(date)] DMD LoRA (2.5 GB)..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/lora/dmd_lora.safetensors" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/lora"
 
-    echo "[$(date)] Downloading scheduler..."
-    hf download meituan-longcat/LongCat-Video-Avatar-1.5 \
-        scheduler/ \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    echo "[$(date)] Scheduler..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/scheduler/scheduler_config.json" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/scheduler"
 
-    # Vocal separator — single file
-    echo "[$(date)] Downloading vocal separator (67 MB)..."
-    provisioning_download \
-        "https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/vocal_separator/Kim_Vocal_2.onnx" \
-        "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/vocal_separator"
+    echo "[$(date)] Vocal separator (67 MB)..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/vocal_separator/Kim_Vocal_2.onnx" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/vocal_separator"
 
-    # Whisper-large-v3 — single model.safetensors + configs, aria2c for the big file
-    echo "[$(date)] Downloading whisper-large-v3 (~3.1 GB)..."
-    mkdir -p "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/whisper-large-v3"
-    provisioning_download \
-        "https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/whisper-large-v3/model.safetensors" \
-        "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/whisper-large-v3"
-    # Config files — hf for directory
-    hf download meituan-longcat/LongCat-Video-Avatar-1.5 \
-        --include "whisper-large-v3/*.json" --include "whisper-large-v3/*.txt" \
-        --exclude "whisper-large-v3/model.safetensors" \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    echo "[$(date)] Whisper-large-v3 (~3.1 GB)..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/whisper-large-v3/model.safetensors" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/whisper-large-v3"
+    for f in added_tokens.json config.json generation_config.json merges.txt normalizer.json preprocessor_config.json special_tokens_map.json tokenizer.json tokenizer_config.json; do
+        provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/whisper-large-v3/$f" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/whisper-large-v3" &
+    done
+    wait
 
-    # Root configs
-    echo "[$(date)] Downloading pipeline configs..."
-    hf download meituan-longcat/LongCat-Video-Avatar-1.5 \
-        config.json model_index.json \
-        --local-dir "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    echo "[$(date)] Pipeline configs..."
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/config.json" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
+    provisioning_download "$HF_BASE/meituan-longcat/LongCat-Video-Avatar-1.5/resolve/main/model_index.json" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
 
     echo "[$(date)] Model download complete."
-    echo "Total disk usage:"
     du -sh "${WEIGHTS_DIR}/LongCat-Video" "${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5"
 }
 
