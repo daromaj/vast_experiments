@@ -31,7 +31,7 @@ from typing import List, Dict, Optional
 # Config — tuned for LongCat-Video Avatar-1.5
 # ==============================================================================
 MIN_GPU_RAM = 24            # GB — 480p INT8 fits, 32 GB preferred for 720p
-MIN_DISK_SPACE = 150        # GB — ~45 GB models + venv + outputs
+MIN_DISK_SPACE = 60         # GB — ~31 GB models + 15 GB system + 5 GB outputs
 MIN_INET_DOWN = 500         # Mb/s — 45 GB in ~12 min at this speed
 MAX_INET_COST = 1.0         # $/GB — flag anything above as scam
 MIN_PCIE_BW = 15            # GB/s — below this, CPU offload & CP bottleneck hard
@@ -46,8 +46,8 @@ MIN_RELIABILITY = 0.97      # skip flaky hosts
 TEMPLATE_HASH = "8ab860114bddc24c4cb43af37aacfa15"
 TEMPLATE_DESC = "vastai/pytorch (default, cuda auto-detect)"
 
-CONTAINER_SIZE_GB = 150     # disk reservation
-DATA_DOWNLOAD_GB = 50       # ~45 GB models + a bit of margin
+CONTAINER_SIZE_GB = 80      # disk reservation (~31 GB models + 15 GB system + margin)
+DATA_DOWNLOAD_GB = 35       # ~31 GB models + margin
 
 # GPU bandwidth rankings (GB/s) — for reference in output
 GPU_BANDWIDTH = {
@@ -245,7 +245,7 @@ def main():
     print(f"\n💡 DLP/$ > 300 = very good speed/price for DiT inference")
     print(f"💡 PCIe gen shown as PCIe<gen>x<lanes> — prefer 4x16 or 5x16 for CPU offload")
     tmpl = TEMPLATE_HASH
-    print(f"💡 To create: vastai create instance <ID> --disk 150 --template_hash {tmpl}")
+    print(f"💡 To create: vastai create instance <ID> --disk 80 --template_hash {tmpl}")
     print(f"   Template: {TEMPLATE_DESC}")
     print(f"   Provisioning overrides torch pin for Cache-DIT >=2.11 compatibility")
 
