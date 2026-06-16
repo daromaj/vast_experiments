@@ -134,7 +134,7 @@ Cache-DIT bucket CPU offload trades ~5% speed for ~30% VRAM reduction.
 - DMD-LoRA ładuje 336 modułów
 - `onnxruntime==1.16.3` nie ma kół dla Python 3.12 → `>=1.18.0`
 - `tritonserverclient` i `libsndfile1` to fejkowe paczki w requirements_avatar.txt
-- SageAttention: tylko wersja 1.0.6 istnieje (nie 2.2.0)
+- SageAttention: PyPI ma tylko 1.0.6. Wersja 2.2.0 (z SageAttention2++) wymaga budowania z source — `git clone` + `python setup.py install`. Provision script robi to automatycznie jako fallback. Dla RTX 5090 buduje też `sageattention3_blackwell`.
 
 ## Video Length
 
