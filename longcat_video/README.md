@@ -86,6 +86,21 @@ Runs audio+image → video inference with INT8 + distillation.
 
 Cache-DIT bucket CPU offload trades ~5% speed for ~30% VRAM reduction.
 
+## Optimization Options (checked 2026-06-17)
+
+| Opcja | Dostępna? | Uwagi |
+|-------|-----------|-------|
+| INT8 DiT (base_model_int8/) | ✅ | 13.6 GB, używamy |
+| FP8 DiT | ❌ | Nie istnieje dla LongCat-Video-Avatar |
+| BF16 DiT (base_model/) | ✅ | ~43 GB, nie mieści się na 24-32 GB GPU |
+| q4/q8 MLX | ❌ CUDA | Tylko Apple Silicon (MLX community) |
+| DMD LoRA (8-step) | ✅ | Stockowe, 2.5 GB, używamy |
+| Dodatkowe LoRA | ❌ | Brak community LOR poza DMD |
+| SageAttention 2.2.0 | ✅ | Pre-built wheel z repo |
+| Flash-attn | ✅ | 15+ min kompilacji, pomijamy |
+
+**Wniosek**: LongCat-Video-Avatar ma ograniczony ekosystem. INT8 + DMD to jedyna sensowna ścieżka dla 24-32 GB GPU. Dla lepszej jakości: eksperymentować z większą liczbą kroków (wyłączyć `--use_distill`) albo poczekać na community FP8.
+
 ## Directory Layout After Provisioning
 
 ```
