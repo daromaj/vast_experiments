@@ -39,6 +39,7 @@ function provisioning_start() {
     provisioning_install_sageattention
     provisioning_install_cache_dit
     provisioning_download_models
+    provisioning_enable_sage_attn_config
     provisioning_patch_demo_script
     provisioning_print_end
 }
@@ -119,33 +120,77 @@ function provisioning_install_python_deps() {
 function provisioning_install_sageattention() {
     echo "[$(date)] Installing SageAttention..."
 
-    # Try wheel first
-    if uv pip install sageattention==1.0.6 --no-build-isolation 2>/dev/null; then
-        echo "SageAttention installed from PyPI"
-    else
-        echo "Building SageAttention from source..."
-        local sage_dir="${WORKSPACE}/SageAttention"
-        if [[ ! -d "$sage_dir" ]]; then
-            git clone https://github.com/thu-ml/SageAttention.git "$sage_dir"
-        fi
-        export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32
-        ( cd "$sage_dir" && python setup.py install )
+    local wheel_dir="${WORKSPACE}/sage_wheels"
+    mkdir -p "$wheel_dir"
+
+    # Pre-built wheels hosted on GitHub — no compilation needed
+    # 5090 (Blackwell): sageattn3 wheel
+    # 4090 (Ada): sageattention 2.2.0 4090 wheel
+    # Default: sageattention 2.2.0 generic wheel
+
+    local wheels=()
+
+    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
+        echo "[$(date)] RTX 5090 detected — using sageattn3 wheel..."
+        wheels+=("https://github.com/daromaj/vast_experiments/raw/master/python/sageattn3-1.0.0-cp312-cp312-linux_x86_64.whl")
     fi
 
-    # Check for Blackwell (5090) GPU and build sageattention3
-    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "5090"; then
-        echo "[$(date)] Blackwell GPU (5090) detected — building sageattention3_blackwell..."
-        local blackwell_dir="${WORKSPACE}/SageAttention/sageattention3_blackwell"
-        if [[ -d "$blackwell_dir" ]]; then
-            ( cd "$blackwell_dir" && python setup.py install )
-            echo "sageattention3_blackwell installed"
-        fi
+    # Always install base sageattention 2.2.0 (provides flash_attn_interface for flashattn3)
+    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "4090"; then
+        wheels+=("https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl")
+    else
+        wheels+=("https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl")
     fi
+
+    for url in "${wheels[@]}"; do
+        echo "[$(date)] Downloading: $url"
+        provisioning_download "$url" "$wheel_dir"
+    done
+
+    echo "[$(date)] Installing SageAttention wheels..."
+    pip install --no-cache-dir "$wheel_dir"/*.whl 2>&1 | tail -5
+
+    echo "[$(date)] SageAttention installed"
+}
+
+function provisioning_download() {
+    local url="$1"
+    local dir="$2"
+    local filename
+    filename=$(basename "${url%%\?*}")
+
+    if [[ -f "${dir}/${filename}" ]]; then
+        echo "  Already downloaded: $filename"
+        return
+    fi
+
+    aria2c -x 16 -s 16 -k 1M -c --summary-interval=10 --console-log-level=notice \
+        --allow-overwrite=true --auto-file-renaming=false \
+        -o "$filename" -d "$dir" "$url"
 }
 
 function provisioning_install_cache_dit() {
     echo "[$(date)] Installing Cache-DIT (CPU offload for DiT layers)..."
     uv pip install -U cache-dit
+}
+
+function provisioning_enable_sage_attn_config() {
+    # Enable flashattn3 (SageAttention) in the INT8 DiT config
+    # LongCat-Video uses flash_attn_interface from SageAttention for flashattn3
+    local CONFIG="${WEIGHTS_DIR}/LongCat-Video-Avatar-1.5/base_model_int8/config.json"
+    if [[ -f "$CONFIG" ]]; then
+        echo "[$(date)] Enabling flashattn3 (SageAttention) in DiT config..."
+        python3 -c "
+import json
+with open('$CONFIG', 'r') as f:
+    c = json.load(f)
+c['enable_flashattn3'] = True
+c['enable_flashattn2'] = False
+with open('$CONFIG', 'w') as f:
+    json.dump(c, f, indent=2)
+print('flashattn3 enabled, flashattn2 disabled')
+"
+    fi
 }
 
 function provisioning_download_models() {
