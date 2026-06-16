@@ -109,12 +109,26 @@ function provisioning_install_python_deps() {
     echo "[$(date)] Installing avatar requirements..."
     uv pip install -r "${LONGCAT_DIR}/requirements_avatar.txt"
 
-    # Flash Attention (critical for performance)
-    echo "[$(date)] Installing flash-attn..."
-    uv pip install flash-attn==2.7.4.post1 --no-build-isolation
+    # Flash Attention (optional — SageAttention/flashattn3 is the primary path)
+    # Skip if building takes too long; inference works with SageAttention
+    echo "[$(date)] Skipping flash-attn build (use SageAttention via flashattn3 instead)"
+    # uv pip install flash-attn==2.7.4.post1 --no-build-isolation
 
     # Additional utilities (LongCat-Video hidden dependencies)
     uv pip install imageio[ffmpeg] tensorboard loguru ftfy einops accelerate
+
+    # Safeguard: ensure torch wasn't downgraded by any dependency resolver
+    echo "[$(date)] Verifying PyTorch >= 2.11 (Cache-DIT requirement)..."
+    python3 -c "
+import torch
+v = torch.__version__
+if v < '2.11':
+    print(f'Torch {v} too old — upgrading...')
+    import subprocess, sys
+    subprocess.check_call([sys.executable, '-m', 'uv', 'pip', 'install', 'torch>=2.11', 'torchvision>=0.20'])
+else:
+    print(f'Torch {v} OK')
+"
 }
 
 function provisioning_install_sageattention() {
