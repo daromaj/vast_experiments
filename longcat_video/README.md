@@ -111,7 +111,9 @@ Cache-DIT bucket CPU offload trades ~5% speed for ~30% VRAM reduction.
 
 **Test results (2026-06-17, RTX 5090 32 GB):**
 - INT8 + DMD 8-step → fatalna jakość. Video generuje się szybko (~2 min/segment) ale rezultat nieakceptowalny.
-- Prawdopodobne przyczyny: za mało kroków denoisingu, kwantyzacja INT8, brak flash_attn.
+- Prawdopodobne przyczyny: za mało kroków denoisingu, kwantyzacja INT8, SDPA zamiast SageAttention.
+- **SageAttention** (https://github.com/thu-ml/sageattention) — jest zainstalowane (v1.0.6). LongCat-Video wspiera przez `enable_flashattn3: true` (używa `flash_attn_interface` z SageAttention). **Nie użyliśmy go** — zamiast tego daliśmy SDPA fallback. Dla produkcji: włączyć flashattn3, będzie ~3× szybciej (~5s/step zamiast 13.5s).
+- Dla RTX 5090 (Blackwell): provision skrypt buduje `sageattention3_blackwell` z optymalizacjami pod SM120.
 
 **Warianty do przetestowania:**
 
