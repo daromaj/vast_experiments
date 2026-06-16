@@ -86,12 +86,19 @@ if [[ "$NUM_SEGMENTS" == "auto" || "$NUM_SEGMENTS" -eq 0 ]]; then
             NUM_FRAMES=93; FPS=16
         fi
         COND_FRAMES=13
-        FIRST_SEG_SEC=$(echo "scale=2; $NUM_FRAMES / $FPS" | bc)
-        EXTRA_SEG_SEC=$(echo "scale=2; ($NUM_FRAMES - $COND_FRAMES) / $FPS" | bc)
-        NEEDED=$(echo "scale=0; (($AUDIO_DURATION - $FIRST_SEG_SEC) / $EXTRA_SEG_SEC + 1.5) / 1" | bc)
+        NEEDED=$(python3 -c "
+dur = float('$AUDIO_DURATION')
+fps = $FPS
+nf = $NUM_FRAMES
+cf = $COND_FRAMES
+first = nf / fps
+extra = (nf - cf) / fps
+n = max(1, int((dur - first) / extra + 1.5))
+print(n)
+")
         if [[ "$NEEDED" -lt 1 ]]; then NEEDED=1; fi
         NUM_SEGMENTS="$NEEDED"
-        echo "Audio: ${AUDIO_DURATION}s → auto segments: $NUM_SEGMENTS (${FIRST_SEG_SEC}s + ${EXTRA_SEG_SEC}s×$(($NEEDED-1)))"
+        echo "Audio: ${AUDIO_DURATION}s → auto segments: $NUM_SEGMENTS"
     fi
 fi
 
