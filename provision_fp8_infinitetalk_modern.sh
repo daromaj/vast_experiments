@@ -1,0 +1,464 @@
+#!/bin/bash
+#
+# Provisioning script for Vast.ai FP8 ComfyUI environment — InfiniTalk modern workflows.
+# Sets up ComfyUI, installs custom nodes, downloads models (with progress monitoring), and compiles SageAttention.
+#
+# Modernized June 2026 — uses updated InfiniTalk workflows with:
+#   - flowmatch_distill sampler (4-step, faster)
+#   - WanVideoContextOptions (windowed context for long-video consistency)
+#   - WanVideoEnhanceAVideo (FETA quality enhancement)
+#   - WanVideoLoopArgs (streaming loop params)
+#   - AudioCrop (silence trimming)
+#   - LoRA weight 0.8 (community consensus)
+#
+# See: workflows/INFINITALK_WORKFLOWS.md for troubleshooting and parameter reference.
+#
+# Based on: povision_fp8.sh (legacy, kept for reference)
+#
+# Total Download Size: ~37.7 GB
+# Key Model Sizes:
+# - Wan2_1_VAE_bf16.safetensors: ~242 MB
+# - clip_vision_h.safetensors: ~1.18 GB
+# - lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors: ~703 MB
+# - umt5-xxl-enc-bf16.safetensors: ~10.58 GB
+# - umt5-xxl-enc-fp8_e4m3fn.safetensors: ~6.27 GB
+# - Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors: ~2.53 GB
+# - Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors: ~15.83 GB
+# - MelBandRoformer_fp16.safetensors: ~435 MB
+#
+# Monitor Output:
+# The script provides download progress in two formats every 10 seconds:
+# 1. Human Readable: [PROGRESS] <Downloaded>GB / <Total>GB (<Percent>%) | Elapsed: <Min>m <Sec>s | Speed: <Speed>MB/s | ETA: <Min>m <Sec>s
+# 2. Machine Readable: [PROG_DATA] JSON_OBJECT
+#    JSON Schema: {"downloaded_bytes": int, "total_bytes": int, "percentage": int, "speed_bps": int, "eta_seconds": int, "elapsed_seconds": int}
+#
+
+source /venv/main/bin/activate
+COMFYUI_DIR=${WORKSPACE}/ComfyUI
+TOTAL_BYTES_TO_DOWNLOAD=40513115852
+MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
+
+APT_PACKAGES=(aria2 bc)
+PIP_PACKAGES=(
+)
+NODES=(
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
+    "https://github.com/kijai/ComfyUI-MelBandRoFormer"
+    "https://github.com/kijai/ComfyUI-KJNodes"
+)
+
+# Modern workflows (June 2026): 5090 and 4090 variants, UI and API formats
+# The API format workflows use class_type/node_id keying for programmatic ComfyUI API execution.
+# The UI format workflows are drag-and-drop into the ComfyUI web interface.
+WORKFLOWS=(
+    # -- Modern (use these) --
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_modern.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_4090_modern.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_modern_API.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_4090_modern_API.json"
+    # -- Legacy (kept for reference) --
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/InfiniteTalk-I2V-FP8-Lip-Sync.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_sage_new_prompts.json"
+)
+
+VAE_MODELS=(
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"
+)
+
+CLIP_VISION=(
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors"
+)
+
+LORAS=(
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+)
+
+TEXT_ENCODERS=(
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors"
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+)
+
+DIFFUSION_MODELS=(
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/InfiniteTalk/Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors"
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors"
+    "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/6251b3a2bd544aaa31400138e55abda4722735cc/MelBandRoformer_fp16.safetensors"
+)
+
+SAGEATTENTION_WHEELS=(
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattn3-1.0.0-cp312-cp312-linux_x86_64.whl"
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+    "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
+)
+
+function provisioning_start() {
+    # Setup logging
+    LOG_FILE="${WORKSPACE}/provisioning.log"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    local provisioning_start_time=$(date +%s)
+    echo "[$(date)] Starting provisioning (modern InfiniTalk)..."
+
+    # Pre-flight check for aria2c
+    if ! command -v aria2c &> /dev/null; then
+        echo "NOTICE: aria2c not found - will be installed via APT_PACKAGES"
+    fi
+
+    provisioning_print_header
+    provisioning_get_apt_packages
+    provisioning_get_pip_packages
+
+    # Start Download Monitoring in background
+    provisioning_monitor_loop &
+    MONITOR_PID=$!
+
+    # Start Parallel Operations
+    # 1. Build SageAttention (CPU intensive, no pip lock)
+    # 2. Setup Nodes (Network/Disk intensive, locks pip)
+    echo "Starting parallel setup: SageAttention Build + Node Installation..."
+
+    { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
+    SAGE_PID=$!
+
+    { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } &
+    NODES_PID=$!
+
+    workflows_dir="${COMFYUI_DIR}/user/default/workflows"
+    mkdir -p "${workflows_dir}"
+    provisioning_get_files "${workflows_dir}" "${WORKFLOWS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/vae" "${VAE_MODELS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/text_encoders" "${TEXT_ENCODERS[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/diffusion_models" "${DIFFUSION_MODELS[@]}"
+    provisioning_get_files \
+        "${COMFYUI_DIR}/models/loras" \
+        "${LORAS[@]}"
+
+    provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
+
+    # Wait for both background processes
+    echo "Waiting for background setup (SageAttention Build + Nodes) to complete..."
+    wait $SAGE_PID
+    local sage_status=$?
+
+    wait $NODES_PID
+    local nodes_status=$?
+
+    if [[ $sage_status -eq 0 && $nodes_status -eq 0 ]]; then
+        echo "Parallel setup complete. Installing SageAttention..."
+        { provisioning_install_sageattention 2>&1 | sed 's/^/[SAGE_INSTALL] /'; }
+    else
+        echo "WARNING: One or more setup tasks failed (Sage: $sage_status, Nodes: $nodes_status)"
+    fi
+
+    # Safeguard: ensure torch>=2.11 after all installs (some packages may downgrade it)
+    provisioning_ensure_torch_version
+
+    # Kill monitor loop
+    kill $MONITOR_PID 2>/dev/null
+
+    provisioning_print_end "$provisioning_start_time"
+}
+
+function provisioning_ensure_torch_version() {
+    # InfiniTalk + WanVideoWrapper need torch>=2.11 for proper operation.
+    # CUDA >= 12.9 has no stable PyTorch wheels — we upgrade to nightly.
+    local min_torch="2.11"
+    local current_torch=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null | cut -d'+' -f1)
+
+    if [[ -z "$current_torch" ]]; then
+        echo "[TORCH_CHECK] WARNING: Could not determine torch version."
+        return 0
+    fi
+
+    echo "[TORCH_CHECK] Current torch version: $current_torch (minimum required: $min_torch)"
+
+    # Detect CUDA version: try nvcc first, fall back to torch.version.cuda
+    local cuda_ver=""
+    if command -v nvcc &>/dev/null; then
+        cuda_ver=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+' | head -1)
+    fi
+    if [[ -z "$cuda_ver" ]]; then
+        cuda_ver=$(python3 -c "import torch; print(torch.version.cuda)" 2>/dev/null)
+    fi
+    echo "[TORCH_CHECK] Detected CUDA version: ${cuda_ver:-unknown}"
+
+    # CUDA >= 12.9 has no stable PyTorch wheels — must use nightly
+    local cuda_major=0 cuda_minor=0
+    if [[ -n "$cuda_ver" ]]; then
+        cuda_major=$(echo "$cuda_ver" | cut -d'.' -f1)
+        cuda_minor=$(echo "$cuda_ver" | cut -d'.' -f2)
+    fi
+
+    if [[ $cuda_major -ge 13 ]] || [[ $cuda_major -eq 12 && $cuda_minor -ge 9 ]]; then
+        local nightly_tag="cu${cuda_major}${cuda_minor}"
+        local nightly_index="https://download.pytorch.org/whl/nightly/${nightly_tag}"
+
+        echo "[TORCH_CHECK] CUDA ${cuda_ver} has no stable PyTorch wheels."
+        echo "[TORCH_CHECK] Upgrading to PyTorch nightly (${nightly_tag})..."
+        pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+        pip install --no-cache-dir --pre torch torchvision torchaudio --index-url "${nightly_index}"
+
+        local new_torch=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null)
+        echo "[TORCH_CHECK] Upgraded to PyTorch ${new_torch}"
+        return 0
+    fi
+
+    # CUDA < 12.9 — stable PyTorch wheels exist, just ensure version is sufficient
+    if python3 -c "import torch; exit(0 if torch.__version__ >= '$min_torch' else 1)" 2>/dev/null; then
+        echo "[TORCH_CHECK] Torch version is sufficient."
+    else
+        echo "[TORCH_CHECK] Torch version is below $min_torch. Upgrading..."
+        pip install --no-cache-dir "torch>=$min_torch" "torchvision>=0.22" "torchaudio>=2.11"
+    fi
+}
+
+function provisioning_monitor_loop() {
+    local start_time=$(date +%s)
+    local interval=10
+    local last_bytes=0
+
+    sleep 5
+
+    while true; do
+        if [[ -d "${COMFYUI_DIR}/models" ]]; then
+            local current_bytes=$(du -sb "${COMFYUI_DIR}/models" 2>/dev/null | awk '{print $1}')
+        else
+            local current_bytes=0
+        fi
+
+        [[ -z "$current_bytes" ]] && current_bytes=0
+
+        local now=$(date +%s)
+        local elapsed=$((now - start_time))
+        [[ $elapsed -eq 0 ]] && elapsed=1
+
+        local percent=0
+        if [[ $TOTAL_BYTES_TO_DOWNLOAD -gt 0 ]]; then
+            percent=$((current_bytes * 100 / TOTAL_BYTES_TO_DOWNLOAD))
+        fi
+
+        local speed=0
+        speed=$((current_bytes / elapsed))
+
+        local eta=0
+        local eta_msg=""
+
+        local download_eta=0
+        local remaining_bytes=$((TOTAL_BYTES_TO_DOWNLOAD - current_bytes))
+        if [[ $speed -gt 0 ]]; then
+            download_eta=$((remaining_bytes / speed))
+        fi
+
+        local setup_eta=$((MIN_SETUP_TIME - elapsed))
+        [[ $setup_eta -lt 0 ]] && setup_eta=0
+
+        if [[ $download_eta -ge $setup_eta ]]; then
+            eta=$download_eta
+        else
+            eta=$setup_eta
+            eta_msg=" (Setup)"
+        fi
+
+        local current_gb=$(echo "scale=2; $current_bytes/1024/1024/1024" | bc 2>/dev/null || echo "0")
+        local total_gb=$(echo "scale=2; $TOTAL_BYTES_TO_DOWNLOAD/1024/1024/1024" | bc 2>/dev/null || echo "0")
+        local speed_mb=$(echo "scale=2; $speed/1024/1024" | bc 2>/dev/null || echo "0")
+        local eta_min=$((eta / 60))
+        local eta_sec=$((eta % 60))
+        local elapsed_min=$((elapsed / 60))
+        local elapsed_sec=$((elapsed % 60))
+
+        echo -e "\n[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Elapsed: ${elapsed_min}m ${elapsed_sec}s | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s${eta_msg}"
+        echo "[PROG_DATA] {\"downloaded_bytes\": $current_bytes, \"total_bytes\": $TOTAL_BYTES_TO_DOWNLOAD, \"percentage\": $percent, \"speed_bps\": $speed, \"eta_seconds\": $eta, \"elapsed_seconds\": $elapsed}"
+
+        sleep $interval
+    done
+}
+
+function provisioning_get_apt_packages() {
+    if [[ -n $APT_PACKAGES ]]; then
+        local apt_cmd="${APT_INSTALL:-apt-get install -y}"
+        sudo $apt_cmd ${APT_PACKAGES[@]}
+    fi
+}
+
+function provisioning_get_pip_packages() {
+    if [[ -n $PIP_PACKAGES ]]; then
+        pip install --no-cache-dir ${PIP_PACKAGES[@]}
+    fi
+}
+
+function provisioning_install_sageattention_deprecated() {
+    # DEPRECATED: Wheel-based installation - kept for reference
+    echo "Installing SageAttention from wheel files..."
+    local wheel_dir="${WORKSPACE}/wheels"
+    mkdir -p "$wheel_dir"
+
+    for url in "${SAGEATTENTION_WHEELS[@]}"; do
+        provisioning_download "$url" "$wheel_dir"
+    done
+
+    pip install --no-cache-dir "$wheel_dir"/*.whl
+}
+
+function provisioning_build_sageattention() {
+    local start_time=$(date +%s)
+    echo "Building SageAttention from source..."
+
+    local sage_dir="${WORKSPACE}/SageAttention"
+
+    if [[ ! -d "$sage_dir" ]]; then
+        echo "Cloning SageAttention repository..."
+        git clone https://github.com/thu-ml/SageAttention.git "$sage_dir"
+    else
+        echo "SageAttention directory exists, pulling latest..."
+        ( cd "$sage_dir" && git pull )
+    fi
+
+    export EXT_PARALLEL=4
+    export NVCC_APPEND_FLAGS="--threads 8"
+    export MAX_JOBS=32
+
+    echo "Compiling SageAttention extensions..."
+    ( cd "$sage_dir" && python setup.py build )
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "SageAttention build complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_install_sageattention() {
+    local start_time=$(date +%s)
+    echo "Installing SageAttention..."
+
+    local sage_dir="${WORKSPACE}/SageAttention"
+
+    ( cd "$sage_dir" && python setup.py install --skip-build )
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "SageAttention installation complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_install_flash_attn() {
+    local start_time=$(date +%s)
+    echo "Installing flash-attn..."
+    pip install flash-attn --no-build-isolation
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "Flash Attention installation complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function install_requirements() {
+    local requirements_file="$1"
+    if [[ -e "$requirements_file" ]]; then
+        echo "Installing requirements from $requirements_file"
+        if command -v uv &> /dev/null; then
+            echo "Using uv for dependency installation..."
+            if uv pip install --no-cache-dir -r "$requirements_file"; then
+                echo "uv pip install succeeded"
+                return 0
+            else
+                echo "uv pip install failed, falling back to regular pip..."
+            fi
+        fi
+        echo "Using regular pip for dependency installation..."
+        pip install --no-cache-dir -r "$requirements_file"
+    fi
+}
+
+function provisioning_get_nodes() {
+    local start_time=$(date +%s)
+    for repo in "${NODES[@]}"; do
+        dir="${repo##*/}"
+        path="${COMFYUI_DIR}/custom_nodes/${dir}"
+        requirements="${path}/requirements.txt"
+        if [[ -d $path ]]; then
+            if [[ ${AUTO_UPDATE,,} != "false" ]]; then
+                echo "Updating node: ${repo}"
+                ( cd "$path" && git pull )
+                install_requirements "$requirements"
+            fi
+        else
+            echo "Downloading node: ${repo}"
+            git clone "${repo}" "${path}" --recursive
+            install_requirements "$requirements"
+        fi
+    done
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo "Nodes installation complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_get_files() {
+    [[ -z $2 ]] && return 1
+    dir="$1"
+    mkdir -p "$dir"
+    shift
+    arr=("$@")
+    echo "Downloading ${#arr[@]} file(s) to $dir..."
+    for url in "${arr[@]}"; do
+        echo "Downloading: $url"
+        provisioning_download "$url" "$dir"
+        echo
+    done
+}
+
+function provisioning_print_header() {
+    echo -e "\\n##############################################"
+    echo -e "#   InfiniTalk Modern Provisioning            #"
+    echo -e "#   ComfyUI + WanVideoWrapper + FP8 Models    #"
+    echo -e "#   workflows: 5090/4090 modern variants      #"
+    echo -e "#   This will take some time (~8-10 minutes)  #"
+    echo -e "##############################################\\n"
+}
+
+function provisioning_print_end() {
+    local start_time="$1"
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+    echo -e "\\nProvisioning complete: Application will start now"
+    echo -e "Total provisioning time: ${minutes}m ${seconds}s\\n"
+    echo -e "Workflows installed to: ${COMFYUI_DIR}/user/default/workflows/"
+    echo -e "Available variants:"
+    echo -e "  5090 UI:  InfiniteTalk-I2V-FP8-Lip-Sync_5090_modern.json"
+    echo -e "  4090 UI:  InfiniteTalk-I2V-FP8-Lip-Sync_4090_modern.json"
+    echo -e "  5090 API: InfiniteTalk-I2V-FP8-Lip-Sync_5090_modern_API.json"
+    echo -e "  4090 API: InfiniteTalk-I2V-FP8-Lip-Sync_4090_modern_API.json"
+    echo -e "\\nSee workflows/INFINITALK_WORKFLOWS.md for troubleshooting.\\n"
+}
+
+function provisioning_download() {
+    local url="$1"
+    local dir="$2"
+    local auth_header=""
+    local filename=""
+
+    filename=$(basename "${url%%\?*}")
+
+    if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
+        auth_header="--header=Authorization: Bearer $HF_TOKEN"
+    fi
+
+    if [[ -n $auth_header ]]; then
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
+            -o "$filename" $auth_header -d "$dir" "$url"
+    else
+        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
+            -o "$filename" -d "$dir" "$url"
+    fi
+}
+
+if [[ ! -f /.noprovisioning ]]; then
+    provisioning_start
+fi
