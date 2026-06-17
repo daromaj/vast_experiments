@@ -1403,64 +1403,6 @@
       }
     },
     {
-      "id": 319,
-      "type": "AudioCrop",
-      "pos": [
-        -3345.810302734375,
-        -1384.95068359375
-      ],
-      "size": [
-        300,
-        100
-      ],
-      "flags": {},
-      "order": 9,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "audio",
-          "type": "AUDIO",
-          "link": null
-        },
-        {
-          "name": "start_time",
-          "type": "STRING",
-          "widget": {
-            "name": "start_time"
-          },
-          "link": null
-        },
-        {
-          "name": "end_time",
-          "type": "STRING",
-          "widget": {
-            "name": "end_time"
-          },
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "name": "audio",
-          "type": "AUDIO",
-          "links": [
-            554,
-            560
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "ComfyUI-WanVideoWrapper",
-        "Node name for S&R": "AudioCrop"
-      },
-      "widgets_values": [
-        "0:00",
-        "10:00"
-      ],
-      "color": "#323",
-      "bgcolor": "#535"
-    },
-    {
       "id": 320,
       "type": "WanVideoContextOptions",
       "pos": [
@@ -1503,8 +1445,7 @@
         4,
         16,
         true,
-        false,
-        null
+        false
       ],
       "color": "#233",
       "bgcolor": "#355"
@@ -1729,7 +1670,7 @@
     ],
     [
       554,
-      319,
+      125,
       0,
       302,
       1,
@@ -1769,7 +1710,7 @@
     ],
     [
       560,
-      319,
+      125,
       0,
       318,
       1,
@@ -1782,14 +1723,6 @@
       122,
       2,
       "WANVIDLORA"
-    ],
-    [
-      562,
-      125,
-      0,
-      319,
-      0,
-      "AUDIO"
     ],
     [
       565,
