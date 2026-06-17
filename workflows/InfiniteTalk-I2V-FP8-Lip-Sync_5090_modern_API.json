@@ -337,7 +337,7 @@
         0
       ],
       "audio": [
-        "319",
+        "125",
         0
       ]
     },
@@ -375,27 +375,13 @@
         0
       ],
       "audio": [
-        "319",
+        "125",
         0
       ]
     },
     "class_type": "VHS_VideoCombine",
     "_meta": {
       "title": "Video Combine \ud83c\udfa5\ud83c\udd65\ud83c\udd57\ud83c\udd62"
-    }
-  },
-  "319": {
-    "inputs": {
-      "audio": [
-        "125",
-        0
-      ],
-      "start_time": "0:00",
-      "end_time": "10:00"
-    },
-    "class_type": "AudioCrop",
-    "_meta": {
-      "title": "Audio Crop"
     }
   },
   "320": {

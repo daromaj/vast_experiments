@@ -203,7 +203,12 @@ function provisioning_ensure_torch_version() {
     fi
 
     # CUDA < 12.9 — stable PyTorch wheels exist, just ensure version is sufficient
-    if python3 -c "import torch; exit(0 if torch.__version__ >= '$min_torch' else 1)" 2>/dev/null; then
+    if python3 -c "
+import torch
+from packaging.version import Version
+v = torch.__version__.split('+')[0]
+exit(0 if Version(v) >= Version('$min_torch') else 1)
+" 2>/dev/null; then
         echo "[TORCH_CHECK] Torch version is sufficient."
     else
         echo "[TORCH_CHECK] Torch version is below $min_torch. Upgrading..."
@@ -299,6 +304,46 @@ function provisioning_install_sageattention_deprecated() {
     pip install --no-cache-dir "$wheel_dir"/*.whl
 }
 
+function provisioning_detect_gpu_arch() {
+    # Detect GPU compute capability and set TORCH_CUDA_ARCH_LIST.
+    # This avoids compiling for architectures we don't have (halves Sage build time).
+    local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+
+    if [[ -z "$gpu_name" ]]; then
+        echo "[GPU_DETECT] WARNING: Could not detect GPU. Will compile for all architectures."
+        return 0
+    fi
+
+    echo "[GPU_DETECT] GPU: $gpu_name"
+
+    # Map GPU model to SM architecture
+    local sm_arch=""
+    case "$gpu_name" in
+        *"RTX 5090"*|*"RTX 5080"*|*"RTX 5070"*|*"RTX 5060"*)
+            sm_arch="12.0" ;;  # Blackwell
+        *"RTX 4090"*|*"RTX 4080"*|*"RTX 4070"*|*"RTX 4060"*|*"L40"*|*"L40S"*)
+            sm_arch="8.9" ;;   # Ada Lovelace
+        *"RTX 3090"*|*"RTX 3080"*|*"RTX 3070"*|*"RTX 3060"*|*"A5000"*|*"A6000"*|*"A100"*)
+            sm_arch="8.0" ;;   # Ampere (A100=8.0, GA102=8.6 but 8.0 covers all)
+        *"A40"*|*"A10"*)
+            sm_arch="8.6" ;;   # Ampere GA102
+        *"H100"*|*"H800"*)
+            sm_arch="9.0" ;;   # Hopper
+        *)
+            echo "[GPU_DETECT] Unknown GPU. Will compile for detected arch only."
+            # Fallback: query compute capability directly
+            sm_arch=$(python3 -c "import torch; print('.'.join(str(i) for i in torch.cuda.get_device_capability()))" 2>/dev/null)
+            ;;
+    esac
+
+    if [[ -n "$sm_arch" ]]; then
+        export TORCH_CUDA_ARCH_LIST="$sm_arch"
+        echo "[GPU_DETECT] TORCH_CUDA_ARCH_LIST=$sm_arch"
+    else
+        echo "[GPU_DETECT] WARNING: Could not determine SM arch. Compiling for all."
+    fi
+}
+
 function provisioning_build_sageattention() {
     local start_time=$(date +%s)
     echo "Building SageAttention from source..."
@@ -312,6 +357,8 @@ function provisioning_build_sageattention() {
         echo "SageAttention directory exists, pulling latest..."
         ( cd "$sage_dir" && git pull )
     fi
+
+    provisioning_detect_gpu_arch
 
     export EXT_PARALLEL=4
     export NVCC_APPEND_FLAGS="--threads 8"
@@ -375,6 +422,7 @@ function provisioning_get_nodes() {
     local start_time=$(date +%s)
     for repo in "${NODES[@]}"; do
         dir="${repo##*/}"
+        dir="${dir%.git}"  # strip .git suffix from basename
         path="${COMFYUI_DIR}/custom_nodes/${dir}"
         requirements="${path}/requirements.txt"
         if [[ -d $path ]]; then
@@ -448,14 +496,16 @@ function provisioning_download() {
         auth_header="--header=Authorization: Bearer $HF_TOKEN"
     fi
 
+    # Use moderate concurrency: 8 connections, 4 splits.
+    # 16/16 was overloading CDN edge nodes and causing 403 stalls.
+    local aria2_opts="-x 8 -s 4 -k 1M -c --max-tries=5 --retry-wait=10 --connect-timeout=30 --timeout=60 \
+        --summary-interval=0 --console-log-level=warn \
+        --allow-overwrite=true --auto-file-renaming=false --file-allocation=none"
+
     if [[ -n $auth_header ]]; then
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
-            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
-            -o "$filename" $auth_header -d "$dir" "$url"
+        aria2c $aria2_opts -o "$filename" $auth_header -d "$dir" "$url"
     else
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
-            --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
-            -o "$filename" -d "$dir" "$url"
+        aria2c $aria2_opts -o "$filename" -d "$dir" "$url"
     fi
 }
 

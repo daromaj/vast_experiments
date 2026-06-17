@@ -254,7 +254,7 @@ LoadImage → ImageResizeKJv2 → GetImageSizeAndCount ──→ WanVideoClipVis
                                     │                        ↑                                  ↑                              │
                                     └── width/height ────────┘                                  │                              │
                                                                                                │                              │
-LoadAudio → AudioCrop ──→ MelBandRoFormerModelLoader → MelBandRoFormerSampler → MultiTalkWav2VecEmbeds ──────────────────────┘
+LoadAudio ──→ MelBandRoFormerModelLoader → MelBandRoFormerSampler → MultiTalkWav2VecEmbeds ──────────────────────┘
                 │                                                                                                                  │
                 └──────────────────────────────────────────────────────────────────→ VHS_VideoCombine ←──────────────────────────┘
                                                                                                 ↑
@@ -283,3 +283,52 @@ This means:
 - **Workflows are community-driven** — the official examples are stale, community workflows (like ours) are the current best practice
 
 When troubleshooting, always check the WanVideoWrapper commit you're running against the latest release. The node pack is where bugs get fixed.
+
+## Testing Notes (June 2026)
+
+Issues found and fixed on `vastai/comfy:cuda-12.9-auto` with ComfyUI 0.7.0 + PyTorch 2.12.0+cu130.
+
+### Workflow fixes applied
+
+| Issue | Fix |
+|---|---|
+| `AudioCrop` node not available in any installed node pack | Removed from all 4 modern workflows. Rewired: `LoadAudio` feeds `MelBandRoFormerSampler` and `VHS_VideoCombine` directly. |
+| `fuse_method: null` in `WanVideoContextOptions` (leftover widget from older WanVideoWrapper API) | Removed extra widget value. Added `fuse_method: "linear"` as optional input. |
+| `fuse_method: 'None'` fails validation (only `'linear'`/`'pyramid'` accepted) | Fixed by above. |
+
+### ComfyUI 0.7.0 / KJNodes incompatibility
+
+KJNodes master branch is **not fully compatible** with ComfyUI 0.7.0's `_io_public` API. The following APIs were removed/changed:
+- `io.DynamicCombo` → removed
+- `io.Autogrow` → removed
+- `Schema.__init__` → no longer accepts `search_aliases`, `accept_all_inputs`
+
+Affected KJNodes (all non-InfiniTalk): `ImageSharpenKJ`, `SimpleCalculatorKJ`, `SamplerSelfRefineVideo`, `ImageTransformKJ`, `DecodeAndSaveVideo`, etc.
+
+**InfiniTalk-critical nodes are unaffected:** `ImageResizeKJv2`, `GetImageSizeAndCount` work fine. The error spam in logs is noise — ignore it.
+
+### Provision script fixes
+
+| Issue | Fix |
+|---|---|
+| `TORCH_CUDA_ARCH_LIST` not set → SageAttention compiles for all GPUs (2× build time) | Auto-detect GPU via `nvidia-smi`, set arch list (sm_120a for 5090, sm_89 for 4090) |
+| `aria2c -x 16 -s 16` causes CDN 403 stalls on HuggingFace redirects | Reduced to `-x 8 -s 4` with `--max-tries=5 --retry-wait=10 --connect-timeout=30 --timeout=60` |
+| String comparison `"2.9.1" >= "2.11"` fails (lexicographic, '9' vs '1') | Use `packaging.version.Version` for proper semver comparison |
+| `.git` suffix on WanVideoWrapper clone URL creates `ComfyUI-WanVideoWrapper.git` dir | Strip `.git` from basename |
+| CUDA >= 12.9 has no stable PyTorch wheels | Auto-detect CUDA version, upgrade to nightly PyTorch for cu129+ |
+
+### Corrupted model files
+
+If aria2c is killed mid-download (e.g., due to CDN stalls), safetensors files appear on disk but are truncated. Verify all models:
+```bash
+/venv/main/bin/python3 -c "
+import safetensors, os
+for d in ['diffusion_models','text_encoders','vae','clip_vision','loras']:
+    for f in os.listdir(f'ComfyUI/models/{d}'):
+        if f.endswith('.safetensors'):
+            try:
+                with safetensors.safe_open(f'ComfyUI/models/{d}/{f}', framework='pt'): pass
+            except Exception as e:
+                print(f'CORRUPT: {d}/{f} - {e}')
+"
+```
