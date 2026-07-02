@@ -26,7 +26,7 @@ COMFYUI_DIR=${WORKSPACE}/ComfyUI
 TOTAL_BYTES_TO_DOWNLOAD=40513115852
 MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
-APT_PACKAGES=(aria2 bc)
+APT_PACKAGES=(aria2 bc libcusparse-dev-12-9 libcublas-dev-12-9 libcusolver-dev-12-9 libcufft-dev-12-9 libcurand-dev-12-9)
 PIP_PACKAGES=(
 )
 NODES=(
@@ -274,6 +274,7 @@ function provisioning_build_sageattention() {
     export EXT_PARALLEL=4
     export NVCC_APPEND_FLAGS="--threads 8"
     export MAX_JOBS=32
+    export TORCH_CUDA_ARCH_LIST='12.0'
     
     # Build SageAttention (Compiles C++/CUDA extensions)
     echo "Compiling SageAttention extensions..."
