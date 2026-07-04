@@ -125,13 +125,13 @@
   },
   "137": {
     "inputs": {
-      "model": "TencentGameMate/chinese-wav2vec2-base",
+      "model": "wav2vec2-chinese-base_fp16.safetensors",
       "base_precision": "fp16",
       "load_device": "main_device"
     },
-    "class_type": "DownloadAndLoadWav2VecModel",
+    "class_type": "Wav2VecModelLoader",
     "_meta": {
-      "title": "(Down)load Wav2Vec Model"
+      "title": "Wav2vec2 Model Loader"
     }
   },
   "138": {
@@ -381,7 +381,7 @@
     },
     "class_type": "VHS_VideoCombine",
     "_meta": {
-      "title": "Video Combine \ud83c\udfa5\ud83c\udd65\ud83c\udd57\ud83c\udd62"
+      "title": "Video Combine 🎥🅥🅗🅢"
     }
   },
   "320": {
