@@ -144,13 +144,47 @@ def calculate_total_cost(offer: Dict) -> float:
     return total_cost
 
 
+# Single source of truth for the results table layout: (label, width, align).
+# Header and every row are rendered from this one spec, so they always line up
+# and each cell is truncated to its column width (no drift, no overflow).
+_COLUMNS = [
+    ("#",     3, '<'),
+    ("ID",    9, '<'),
+    ("Type",  4, '<'),
+    ("GPU",  12, '<'),
+    ("VRAM",  5, '<'),
+    ("Est$",  6, '>'),
+    ("Base$", 6, '>'),
+    ("Down",  6, '>'),
+    ("DLm",   4, '>'),
+    ("Up",    6, '>'),
+    ("Loc",   3, '<'),
+    ("Rel",   5, '>'),
+    ("TF",    6, '>'),
+]
+_COL_SEP = " "
+
+
+def _render_row(cells: List[str]) -> str:
+    """Join pre-computed cell strings using the shared _COLUMNS widths/alignment."""
+    return _COL_SEP.join(
+        f"{str(cell)[:width]:{align}{width}}"
+        for cell, (_label, width, align) in zip(cells, _COLUMNS)
+    )
+
+
+def table_width() -> int:
+    """Total rendered width of the table (for dividers / box-drawing)."""
+    return sum(w for _l, w, _a in _COLUMNS) + len(_COL_SEP) * (len(_COLUMNS) - 1)
+
+
 def format_table_header() -> str:
     """
     Generate table header for results display.
     """
-    header_line = "# ID   Type GPU          VRAM Est$ Base$ Down DLm Up Loc Rel TF\n"
-    divider = "-" * len(header_line.rstrip()) + "\n"
-    return header_line + divider
+    header = _render_row([label for label, _w, _a in _COLUMNS])
+    divider = "-" * len(header)
+    return header + "\n" + divider + "\n"
 
 
 def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
@@ -161,9 +195,9 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
     prefix = '*' if selected else ' '
     # Extract critical fields
     # Use 'id' (ask_contract_id) which is what vastai create instance needs
-    machine_id = str(offer.get('id', offer.get('ask_contract_id', 'N/A')))[:5]
+    machine_id = str(offer.get('id', offer.get('ask_contract_id', 'N/A')))
     instance_type = offer.get('instance_type', 'unk')[:3].upper()
-    gpu_name = offer.get('gpu_name', 'Unknown').replace('_', ' ')[:12]
+    gpu_name = offer.get('gpu_name', 'Unknown').replace('_', ' ')
     num_gpus = offer.get('num_gpus', 0)
     gpu_ram = offer.get('gpu_ram', 0)
 
@@ -193,9 +227,23 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
 
     dl_str = f"{offer.get('download_minutes', 0):.0f}m"
 
-    row = f"{prefix}{rank:<1} {machine_id:<4} {instance_type:<4} {gpu_name:<12} {vram_str:<5} {total_cost:<5.4f} {dph:<5.4f} {down_str:<5} {dl_str:<4} {up_str:<4} {geolocation:<2} {reliability:<3.1f} {tflops_str:<4}\n"
+    cells = [
+        f"{prefix}{rank}",
+        machine_id,
+        instance_type,
+        gpu_name,
+        vram_str,
+        f"{total_cost:.4f}",
+        f"{dph:.4f}",
+        down_str,
+        dl_str,
+        up_str,
+        geolocation,
+        f"{reliability:.1f}",
+        tflops_str,
+    ]
 
-    return row
+    return _render_row(cells) + "\n"
 
 
 def create_instance(offer: Dict):
@@ -243,9 +291,8 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         curses.start_color()
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight selected row
 
-        # Get table width
-        header_line_example = "# ID   Type GPU          VRAM Est$ Base$ Down DLm Up Loc Rel TF\n"
-        header_width = len(header_line_example.rstrip())
+        # Get table width from the shared column spec (header + rows use the same)
+        header_width = table_width()
 
         # Prepare lines
         lines = [f"TOP {len(offers)} OFFERS (sorted by estimated total hourly cost) - Selected: #{selected_row_idx+1}"]
