@@ -23,11 +23,14 @@
 
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
-TOTAL_BYTES_TO_DOWNLOAD=40513115852
+# Dropped unused umt5 fp8 encoder (~6.73 GB) — see TEXT_ENCODERS note.
+TOTAL_BYTES_TO_DOWNLOAD=33779155210
 MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
 APT_PACKAGES=(aria2 bc libcusparse-dev-12-9 libcublas-dev-12-9 libcusolver-dev-12-9 libcufft-dev-12-9 libcurand-dev-12-9)
 PIP_PACKAGES=(
+    # hf_transfer (Rust multi-threaded downloader) + the `hf` CLI for HuggingFace pulls.
+    "huggingface_hub[hf_transfer]"
 )
 NODES=(
     "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
@@ -41,8 +44,11 @@ WORKFLOWS=(
     "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/InfiniteTalk-I2V-FP8-Lip-Sync.json"
     "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_sage_new_prompts.json"
     # July 2026 optimization candidates (fp8_e4m3fn_fast + merged LoRA + max-autotune-no-cudagraphs)
+    # 5090 (32GB): blocks_to_swap=0. 4090 (24GB): blocks_to_swap=20 + prefetch=1 to fit VRAM.
     "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_5090_july2026_4step.json"
     "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_5090_july2026_5step.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_4090_july2026_4step.json"
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_4090_july2026_5step.json"
 )
 
 VAE_MODELS=(
@@ -60,8 +66,9 @@ LORAS=(
 
 TEXT_ENCODERS=(
     # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    # Only the bf16 encoder is loaded by every workflow. The fp8 encoder (6.27 GB) was
+    # downloaded but never referenced by any workflow JSON — dropped to save ~6 GB / provision.
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors"
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-fp8_e4m3fn.safetensors"
 )
 
 DIFFUSION_MODELS=(
@@ -277,7 +284,25 @@ function provisioning_build_sageattention() {
     export EXT_PARALLEL=4
     export NVCC_APPEND_FLAGS="--threads 8"
     export MAX_JOBS=32
-    export TORCH_CUDA_ARCH_LIST='12.0'
+
+    # Build ONLY for the provisioned host's GPU arch. Each arch in TORCH_CUDA_ARCH_LIST
+    # makes NVCC recompile every kernel again (~2x per arch), and sm_120 code won't even
+    # load on a 4090 (sm_89) — so single, host-matched arch is both fastest and correct.
+    local arch
+    arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ ! $arch =~ ^[0-9]+\.[0-9]+$ ]]; then
+        # Older driver without compute_cap query — infer from the GPU name.
+        local gpu_name
+        gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)
+        case "$gpu_name" in
+            *5090*|*5080*|*"RTX 50"*|*Blackwell*) arch="12.0" ;;
+            *4090*|*4080*|*"RTX 40"*|*L40*|*Ada*)  arch="8.9"  ;;
+            *) arch="12.0" ;;  # default to the primary target (5090)
+        esac
+        echo "compute_cap query unavailable; inferred arch=${arch} from name '${gpu_name}'"
+    fi
+    export TORCH_CUDA_ARCH_LIST="$arch"
+    echo "Building SageAttention for detected GPU arch: TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
     
     # Build SageAttention (Compiles C++/CUDA extensions)
     echo "Compiling SageAttention extensions..."
@@ -403,20 +428,44 @@ function provisioning_download() {
     # Extract filename from URL (remove query parameters and get last path segment)
     filename=$(basename "${url%%\?*}")
 
+    # For HuggingFace files, prefer hf_transfer (Rust multi-threaded) via the `hf` CLI.
+    # Roughly on par with aria2c -x12 on a fast host, but more resilient to HF
+    # per-connection throttling. Falls back to aria2c below on any failure.
+    if [[ $url =~ ^https://huggingface\.co/(.+)/resolve/([^/]+)/(.+)$ ]]; then
+        local repo="${BASH_REMATCH[1]}"
+        local revision="${BASH_REMATCH[2]}"
+        local path_in_repo="${BASH_REMATCH[3]}"
+        local hf_cli=""
+        command -v hf &>/dev/null && hf_cli="hf"
+        [[ -z $hf_cli ]] && command -v huggingface-cli &>/dev/null && hf_cli="huggingface-cli"
+        if [[ -n $hf_cli ]]; then
+            if HF_HUB_ENABLE_HF_TRANSFER=1 "$hf_cli" download "$repo" "$path_in_repo" \
+                    --revision "$revision" --local-dir "$dir" \
+                    ${HF_TOKEN:+--token "$HF_TOKEN"}; then
+                # hf preserves repo sub-paths; flatten to the bare filename if needed.
+                if [[ "$path_in_repo" != "$filename" && -f "$dir/$path_in_repo" ]]; then
+                    mv -f "$dir/$path_in_repo" "$dir/$filename"
+                fi
+                return 0
+            fi
+            echo "hf download failed for $url — falling back to aria2c"
+        fi
+    fi
+
     # Detect HuggingFace URLs and add auth if token exists
     if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
         auth_header="--header=Authorization: Bearer $HF_TOKEN"
     fi
 
-    # Use aria2c with optimal settings (16 parallel connections, auto-resume)
+    # aria2c fallback / non-HF URLs (12 parallel connections, auto-resume)
     # --file-allocation=none: Required for accurate disk usage monitoring during download
     # --summary-interval=0: Suppress aria2c native progress summary to avoid clutter
     if [[ -n $auth_header ]]; then
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+        aria2c -x 12 -s 12 -k 1M -c --summary-interval=0 --console-log-level=warn \
             --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
             -o "$filename" $auth_header -d "$dir" "$url"
     else
-        aria2c -x 16 -s 16 -k 1M -c --summary-interval=0 --console-log-level=warn \
+        aria2c -x 12 -s 12 -k 1M -c --summary-interval=0 --console-log-level=warn \
             --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
             -o "$filename" -d "$dir" "$url"
     fi

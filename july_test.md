@@ -66,6 +66,22 @@ Same procedure. Only worth running if 4step shows quality problems, or to see th
 - 4step fails, 5step passes → use 5step.
 - Both fail quality → isolate which lever broke it: re-test with fp8_fast OFF (quant back to `disabled`, merge_loras `false`) at 4/5 steps to see if fp8 or the step cut is the culprit.
 
+## 4090 variants (24 GB)
+
+`IT_4090_july2026_4step.json` / `_5step.json` are identical to the 5090 variants **except block swap** — the only setting that must change for Ada/24 GB. fp8 `_scaled_mm`, SageAttention 2.x, fp16_fast and max-autotune all work on a 4090; VRAM is the sole constraint.
+
+| Setting | 5090 (32 GB) | 4090 (24 GB) |
+|---|---|---|
+| blocks_to_swap | 0 | 20 |
+| prefetch_blocks | 0 | 1 |
+
+`blocks_to_swap=20` (of the 14B model's 40 blocks) is the node default and a **safe starting point** — not a tuned value. `prefetch_blocks=1` overlaps the CPU→GPU block transfer with compute to claw back most of the swap penalty.
+
+**Tune it on the host:**
+- Watch `nvidia-smi` peak VRAM during a run. If it OOMs, raise `blocks_to_swap` (try 24–28).
+- If there's several GB of headroom to spare, **lower** it (try 12–16) — fewer swapped blocks = faster. Every block you keep resident is time saved.
+- Expect the 4090 to be slower than the 5090 regardless: 24 GB can't hold the whole model, so some swap traffic is unavoidable. These variants make it *run* and be as fast as 24 GB allows, not match the 5090.
+
 ## Reminder on the ceiling
 
 None of these reach the API provider's ~6–7 min. That's near-certainly multi-GPU Ulysses sequence parallelism (officially supported: `torchrun --ulysses_size=N --dit_fsdp`), which the single-GPU kijai wrapper can't do. To actually match the API you'd leave ComfyUI and run `generate_infinitetalk.py` under torchrun on a multi-GPU box. Separate experiment.
