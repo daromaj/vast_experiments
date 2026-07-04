@@ -552,7 +552,7 @@
     },
     {
       "id": 137,
-      "type": "DownloadAndLoadWav2VecModel",
+      "type": "Wav2VecModelLoader",
       "pos": [
         -3640.232421875,
         -991.0834350585938
@@ -577,7 +577,7 @@
       "properties": {
         "cnr_id": "ComfyUI-WanVideoWrapper",
         "ver": "058286fc0f3b0651a2f6b68309df3f06e8332cc0",
-        "Node name for S&R": "DownloadAndLoadWav2VecModel",
+        "Node name for S&R": "Wav2VecModelLoader",
         "widget_ue_connectable": {
           "model": true,
           "base_precision": true,
@@ -585,7 +585,7 @@
         }
       },
       "widgets_values": [
-        "TencentGameMate/chinese-wav2vec2-base",
+        "wav2vec2-chinese-base_fp16.safetensors",
         "fp16",
         "main_device"
       ],

@@ -1,32 +1,36 @@
 #!/bin/bash
-# 
-# Provisioning script for Vast.ai FP8 ComfyUI environment.
-# Sets up ComfyUI, installs custom nodes, downloads models (with progress monitoring), and compiles SageAttention.
 #
-# Total Download Size: ~37.7 GB
+# Provisioning script for Vast.ai — LongCat-Video-Avatar-1.5 via ComfyUI + kijai WanVideoWrapper.
+#
+# This is the ComfyUI path (mirrors povision_fp8.sh / InfiniteTalk), NOT the dead
+# raw-torchrun INT8 path in longcat_video/. Same stack you already run for InfiniteTalk:
+# WanVideoWrapper + wav2vec/MultiTalk embeds + block swap + SageAttention.
+#
+# GPU targets: RTX 5090 (32GB) and RTX 4090 (24GB). fp8 DiT fits both.
+#
+# Total Download Size: ~29.4 GB
 # Key Model Sizes:
-# - Wan2_1_VAE_bf16.safetensors: ~242 MB
-# - clip_vision_h.safetensors: ~1.18 GB
-# - lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors: ~703 MB
-# - umt5-xxl-enc-bf16.safetensors: ~10.58 GB
-# - umt5-xxl-enc-fp8_e4m3fn.safetensors: ~6.27 GB
-# - Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors: ~2.53 GB
-# - Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors: ~15.83 GB
-# - MelBandRoformer_fp16.safetensors: ~435 MB
-# - wav2vec2-chinese-base_fp16.safetensors: ~190 MB (models/wav2vec2, Wav2VecModelLoader)
+# - LongCat-Avatar-single_fp8_e4m3fn_scaled_mixed_KJ.safetensors: ~16.9 GB  (DiT, fp8)
+# - umt5-xxl-enc-bf16.safetensors:                                ~10.58 GB (text encoder, shared w/ InfiniteTalk)
+# - LongCat-Avatar-15_dmd_distill_lora_rank128_bf16.safetensors:  ~1.26 GB  (8-step DMD distill LoRA)
+# - MelBandRoformer_fp16.safetensors:                             ~435 MB   (vocal separator)
+# - wav2vec2-chinese-base_fp16.safetensors:                       ~190 MB   (Wav2VecModelLoader, models/wav2vec2)
+# - Wan2_1_VAE_bf16.safetensors:                                  ~242 MB
 #
-# Monitor Output:
-# The script provides download progress in two formats every 10 seconds:
-# 1. Human Readable: [PROGRESS] <Downloaded>GB / <Total>GB (<Percent>%) | Elapsed: <Min>m <Sec>s | Speed: <Speed>MB/s | ETA: <Min>m <Sec>s
-# 2. Machine Readable: [PROG_DATA] JSON_OBJECT
-#    JSON Schema: {"downloaded_bytes": int, "total_bytes": int, "percentage": int, "speed_bps": int, "eta_seconds": int, "elapsed_seconds": int}
+# After provisioning, in the ComfyUI UI:
+#   1. Model loader: point at LongCat-Avatar-single_fp8_e4m3fn_scaled_mixed_KJ.safetensors
+#      (the official example JSON defaults to the bf16 name; switch the dropdown to the fp8 file).
+#   2. Block swap:  5090 → blocks_to_swap 0 (all resident). 4090 → 20 (raise to 25 if OOM, lower if headroom).
+#   3. Steps:       start 8 (distill LoRA is DMD 8-step). Bump to 12 only if quality needs it.
+#   4. Resolution:  832x480 for the 15-30 min / 60s budget. 720p blows past 30 min.
+#
+# Monitor Output: same [PROGRESS] / [PROG_DATA] JSON format as povision_fp8.sh.
 #
 
 source /venv/main/bin/activate
 COMFYUI_DIR=${WORKSPACE}/ComfyUI
-# Dropped unused umt5 fp8 encoder (~6.73 GB) — see TEXT_ENCODERS note.
-# +wav2vec (~190 MB) pre-fetch → see WAV2VEC_MODELS note.
-TOTAL_BYTES_TO_DOWNLOAD=33978384650
+# fp8 DiT 16.9 + umt5 10.58 + lora 1.26 + melband 0.44 + vae 0.24 + wav2vec 0.19 ≈ 29.6 GB
+TOTAL_BYTES_TO_DOWNLOAD=29590000000
 MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
 APT_PACKAGES=(aria2 bc libcusparse-dev-12-9 libcublas-dev-12-9 libcusolver-dev-12-9 libcufft-dev-12-9 libcurand-dev-12-9)
@@ -42,52 +46,37 @@ NODES=(
 )
 
 WORKFLOWS=(
-    # "https://raw.githubusercontent.com/vast-ai/base-image/refs/heads/main/derivatives/pytorch/derivatives/comfyui/workflows/text_to_video_wan.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/InfiniteTalk-I2V-FP8-Lip-Sync.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/InfiniteTalk-I2V-FP8-Lip-Sync_5090_sage_new_prompts.json"
-    # July 2026 optimization candidates (fp8_e4m3fn_fast + merged LoRA + max-autotune-no-cudagraphs)
-    # 5090 (32GB): blocks_to_swap=0. 4090 (24GB): blocks_to_swap=20 + prefetch=1 to fit VRAM.
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_5090_july2026_4step.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_5090_july2026_5step.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_4090_july2026_4step.json"
-    "https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/workflows/IT_4090_july2026_5step.json"
+    # Official kijai LongCat-Avatar audio+image → video example (832x480, 93f window, distill LoRA, sageattn).
+    "https://raw.githubusercontent.com/kijai/ComfyUI-WanVideoWrapper/main/example_workflows/LongCatAvatar_audio_image_to_video_example_01.json"
 )
 
 VAE_MODELS=(
-    # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"
 )
 
-CLIP_VISION=(
-    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors"
-)
-
 LORAS=(
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+    # 8-step DMD distillation LoRA for LongCat-Avatar-1.5
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LongCat/LongCat-Avatar-15_dmd_distill_lora_rank128_bf16.safetensors"
 )
 
 TEXT_ENCODERS=(
-    # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-    # Only the bf16 encoder is loaded by every workflow. The fp8 encoder (6.27 GB) was
-    # downloaded but never referenced by any workflow JSON — dropped to save ~6 GB / provision.
+    # bf16 encoder — same file the InfiniteTalk workflows already use.
     "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-bf16.safetensors"
 )
 
 WAV2VEC_MODELS=(
-    # Pre-fetch wav2vec so the first generation doesn't stall on a runtime download.
-    # Current WanVideoWrapper uses the Wav2VecModelLoader node (reads ComfyUI/models/wav2vec2,
-    # config baked into the node). NOTE: existing workflows here reference the OLD
-    # DownloadAndLoadWav2VecModel node, which no longer exists in the wrapper — swap that node for
-    # "Wav2vec2 Model Loader" and point it at this file. ~190 MB.
+    # Single-file wav2vec for the current wrapper's Wav2VecModelLoader (reads ComfyUI/models/wav2vec2).
+    # The loader carries its own wav2vec2_config.json, so only this .safetensors is needed.
     "https://huggingface.co/Kijai/wav2vec2_safetensors/resolve/main/wav2vec2-chinese-base_fp16.safetensors"
 )
 
 DIFFUSION_MODELS=(
-    # "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors"
-    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/InfiniteTalk/Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors"
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors"
+    # fp8 DiT — fits both 5090 (resident) and 4090 (with block swap). Primary path.
+    "https://huggingface.co/Kijai/LongCat-Video_comfy/resolve/main/Avatar/LongCat-Avatar-single_fp8_e4m3fn_scaled_mixed_KJ.safetensors"
+    # bf16 reference DiT (31.7 GB) — only for 5090 max-quality runs, does NOT fit a 4090. Uncomment if wanted.
+    # "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LongCat/LongCat-Avatar-15_bf16.safetensors"
+    # Vocal separator (reused from InfiniteTalk stack). Bypass in the UI if input audio is already clean voice.
     "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/6251b3a2bd544aaa31400138e55abda4722735cc/MelBandRoformer_fp16.safetensors"
-
 )
 
 SAGEATTENTION_WHEELS=(
@@ -122,13 +111,13 @@ function provisioning_start() {
     # 1. Build SageAttention (CPU intensive, no pip lock)
     # 2. Setup Nodes (Network/Disk intensive, locks pip)
     echo "Starting parallel setup: SageAttention Build + Node Installation..."
-    
+
     { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
     SAGE_PID=$!
-    
+
     { provisioning_get_nodes 2>&1 | sed 's/^/[NODES] /'; } &
     NODES_PID=$!
-    
+
 
 
     workflows_dir="${COMFYUI_DIR}/user/default/workflows"
@@ -137,21 +126,17 @@ function provisioning_start() {
     provisioning_get_files "${COMFYUI_DIR}/models/vae" "${VAE_MODELS[@]}"
     provisioning_get_files "${COMFYUI_DIR}/models/text_encoders" "${TEXT_ENCODERS[@]}"
     provisioning_get_files "${COMFYUI_DIR}/models/diffusion_models" "${DIFFUSION_MODELS[@]}"
-    provisioning_get_files \
-        "${COMFYUI_DIR}/models/loras" \
-        "${LORAS[@]}"    
-
-    provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
+    provisioning_get_files "${COMFYUI_DIR}/models/loras" "${LORAS[@]}"
     provisioning_get_files "${COMFYUI_DIR}/models/wav2vec2" "${WAV2VEC_MODELS[@]}"
 
     # Wait for both background processes
     echo "Waiting for background setup (SageAttention Build + Nodes) to complete..."
     wait $SAGE_PID
     local sage_status=$?
-    
+
     wait $NODES_PID
     local nodes_status=$?
-    
+
     if [[ $sage_status -eq 0 && $nodes_status -eq 0 ]]; then
         echo "Parallel setup complete. Installing SageAttention..."
         # Quick install step now that build is done and pip is free
@@ -169,66 +154,50 @@ function provisioning_start() {
 function provisioning_monitor_loop() {
     local start_time=$(date +%s)
     local interval=10
-    local last_bytes=0
-    
+
     # Wait a bit for folders to be created
     sleep 5
 
     while true; do
-        # Calculate current size of models directory (where most large files go)
-        # Using -s for summary, -b for bytes. 
-        # Check specific directories to be accurate or just ComfyUI/models
-        # Models are scattered, but mostly in models/
         if [[ -d "${COMFYUI_DIR}/models" ]]; then
             local current_bytes=$(du -sb "${COMFYUI_DIR}/models" 2>/dev/null | awk '{print $1}')
         else
             local current_bytes=0
         fi
-        
-        # Default to 0 if du fails
+
         [[ -z "$current_bytes" ]] && current_bytes=0
 
-        # Calculate metrics
         local now=$(date +%s)
         local elapsed=$((now - start_time))
         [[ $elapsed -eq 0 ]] && elapsed=1
-        
+
         local percent=0
         if [[ $TOTAL_BYTES_TO_DOWNLOAD -gt 0 ]]; then
             percent=$((current_bytes * 100 / TOTAL_BYTES_TO_DOWNLOAD))
         fi
-        
-        # Calculate Speed (bytes per second)
-        # Using simple average over total time for stability, or could do delta
-        # Let's do delta for more real-time feel
+
         local speed=0
-        # For simplicity in bash, just use average speed so far to avoid jumpiness
         speed=$((current_bytes / elapsed))
-        
-        # Calculate ETA
+
         local eta=0
         local eta_msg=""
-        
-        # 1. Download ETA
+
         local download_eta=0
         local remaining_bytes=$((TOTAL_BYTES_TO_DOWNLOAD - current_bytes))
         if [[ $speed -gt 0 ]]; then
             download_eta=$((remaining_bytes / speed))
         fi
-        
-        # 2. Setup ETA (minimum run time check)
+
         local setup_eta=$((MIN_SETUP_TIME - elapsed))
         [[ $setup_eta -lt 0 ]] && setup_eta=0
-        
-        # 3. Final ETA is max of both
+
         if [[ $download_eta -ge $setup_eta ]]; then
             eta=$download_eta
         else
             eta=$setup_eta
             eta_msg=" (Setup)"
         fi
-        
-        # Format for display
+
         local current_gb=$(echo "scale=2; $current_bytes/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local total_gb=$(echo "scale=2; $TOTAL_BYTES_TO_DOWNLOAD/1024/1024/1024" | bc 2>/dev/null || echo "0")
         local speed_mb=$(echo "scale=2; $speed/1024/1024" | bc 2>/dev/null || echo "0")
@@ -237,10 +206,8 @@ function provisioning_monitor_loop() {
         local elapsed_min=$((elapsed / 60))
         local elapsed_sec=$((elapsed % 60))
 
-        # Human Friendly Output
         echo -e "\n[PROGRESS] ${current_gb}GB / ${total_gb}GB (${percent}%) | Elapsed: ${elapsed_min}m ${elapsed_sec}s | Speed: ${speed_mb}MB/s | ETA: ${eta_min}m ${eta_sec}s${eta_msg}"
-        
-        # Machine Friendly Output (JSON)
+
         echo "[PROG_DATA] {\"downloaded_bytes\": $current_bytes, \"total_bytes\": $TOTAL_BYTES_TO_DOWNLOAD, \"percentage\": $percent, \"speed_bps\": $speed, \"eta_seconds\": $eta, \"elapsed_seconds\": $elapsed}"
 
         sleep $interval
@@ -249,7 +216,6 @@ function provisioning_monitor_loop() {
 
 function provisioning_get_apt_packages() {
     if [[ -n $APT_PACKAGES ]]; then
-        # Use APT_INSTALL if defined, otherwise fallback to apt-get
         local apt_cmd="${APT_INSTALL:-apt-get install -y}"
         sudo $apt_cmd ${APT_PACKAGES[@]}
     fi
@@ -261,29 +227,12 @@ function provisioning_get_pip_packages() {
     fi
 }
 
-function provisioning_install_sageattention_deprecated() {
-    # DEPRECATED: Wheel-based installation - kept for reference
-    echo "Installing SageAttention from wheel files..."
-    local wheel_dir="${WORKSPACE}/wheels"
-    mkdir -p "$wheel_dir"
-
-    # Download wheel files
-    for url in "${SAGEATTENTION_WHEELS[@]}"; do
-        provisioning_download "$url" "$wheel_dir"
-    done
-
-    # Install all downloaded wheels
-    pip install --no-cache-dir "$wheel_dir"/*.whl
-}
-
 function provisioning_build_sageattention() {
     local start_time=$(date +%s)
-    # Builds SageAttention from source with parallel compilation
     echo "Building SageAttention from source..."
-    
+
     local sage_dir="${WORKSPACE}/SageAttention"
-    
-    # Clone the repository if not already present
+
     if [[ ! -d "$sage_dir" ]]; then
         echo "Cloning SageAttention repository..."
         git clone https://github.com/thu-ml/SageAttention.git "$sage_dir"
@@ -291,74 +240,52 @@ function provisioning_build_sageattention() {
         echo "SageAttention directory exists, pulling latest..."
         ( cd "$sage_dir" && git pull )
     fi
-    
-    # Set parallel compilation environment variables for faster builds
+
     export EXT_PARALLEL=4
     export NVCC_APPEND_FLAGS="--threads 8"
     export MAX_JOBS=32
 
-    # Build ONLY for the provisioned host's GPU arch. Each arch in TORCH_CUDA_ARCH_LIST
-    # makes NVCC recompile every kernel again (~2x per arch), and sm_120 code won't even
-    # load on a 4090 (sm_89) — so single, host-matched arch is both fastest and correct.
+    # Build ONLY for the provisioned host's GPU arch (host-matched = fastest + correct).
     local arch
     arch=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
     if [[ ! $arch =~ ^[0-9]+\.[0-9]+$ ]]; then
-        # Older driver without compute_cap query — infer from the GPU name.
         local gpu_name
         gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)
         case "$gpu_name" in
             *5090*|*5080*|*"RTX 50"*|*Blackwell*) arch="12.0" ;;
             *4090*|*4080*|*"RTX 40"*|*L40*|*Ada*)  arch="8.9"  ;;
-            *) arch="12.0" ;;  # default to the primary target (5090)
+            *) arch="12.0" ;;
         esac
         echo "compute_cap query unavailable; inferred arch=${arch} from name '${gpu_name}'"
     fi
     export TORCH_CUDA_ARCH_LIST="$arch"
     echo "Building SageAttention for detected GPU arch: TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
-    
-    # Build SageAttention (Compiles C++/CUDA extensions)
+
     echo "Compiling SageAttention extensions..."
     ( cd "$sage_dir" && python setup.py build )
-    
+
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
-    echo "SageAttention build complete. Duration: ${minutes}m ${seconds}s"
+    echo "SageAttention build complete. Duration: $((duration / 60))m $((duration % 60))s"
 }
 
 function provisioning_install_sageattention() {
     local start_time=$(date +%s)
     echo "Installing SageAttention..."
-    
-    local sage_dir="${WORKSPACE}/SageAttention"
-    
-    # Install the pre-built package
-    ( cd "$sage_dir" && python setup.py install --skip-build )
-    
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
-    echo "SageAttention installation complete. Duration: ${minutes}m ${seconds}s"
-}
 
-function provisioning_install_flash_attn() {
-    local start_time=$(date +%s)
-    echo "Installing flash-attn..."
-    pip install flash-attn --no-build-isolation
+    local sage_dir="${WORKSPACE}/SageAttention"
+
+    ( cd "$sage_dir" && python setup.py install --skip-build )
+
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
-    echo "Flash Attention installation complete. Duration: ${minutes}m ${seconds}s"
+    echo "SageAttention installation complete. Duration: $((duration / 60))m $((duration % 60))s"
 }
 
 function install_requirements() {
     local requirements_file="$1"
     if [[ -e "$requirements_file" ]]; then
         echo "Installing requirements from $requirements_file"
-        # Try uv pip install first
         if command -v uv &> /dev/null; then
             echo "Using uv for dependency installation..."
             if uv pip install --no-cache-dir -r "$requirements_file"; then
@@ -368,7 +295,6 @@ function install_requirements() {
                 echo "uv pip install failed, falling back to regular pip..."
             fi
         fi
-        # Fall back to regular pip
         echo "Using regular pip for dependency installation..."
         pip install --no-cache-dir -r "$requirements_file"
     fi
@@ -394,9 +320,7 @@ function provisioning_get_nodes() {
     done
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
-    echo "Nodes installation complete. Duration: ${minutes}m ${seconds}s"
+    echo "Nodes installation complete. Duration: $((duration / 60))m $((duration % 60))s"
 }
 
 function provisioning_get_files() {
@@ -415,8 +339,8 @@ function provisioning_get_files() {
 
 function provisioning_print_header() {
     echo -e "\\n##############################################"
-    echo -e "#          Provisioning container            #"
-    echo -e "#         This will take some time           #"
+    echo -e "#   LongCat-Avatar-1.5 — ComfyUI provision   #"
+    echo -e "#   WanVideoWrapper + distill LoRA + Sage     #"
     echo -e "# Your container will be ready on completion #"
     echo -e "##############################################\\n"
 }
@@ -425,10 +349,13 @@ function provisioning_print_end() {
     local start_time="$1"
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
     echo -e "\\nProvisioning complete: Application will start now"
-    echo -e "Total provisioning time: ${minutes}m ${seconds}s\\n"
+    echo -e "Total provisioning time: $((duration / 60))m $((duration % 60))s\\n"
+    echo -e "NEXT STEPS (in ComfyUI):"
+    echo -e "  - Load workflow: LongCatAvatar_audio_image_to_video_example_01.json"
+    echo -e "  - Model loader -> LongCat-Avatar-single_fp8_e4m3fn_scaled_mixed_KJ.safetensors"
+    echo -e "  - Block swap: 5090=0, 4090=20 (raise to 25 if OOM)"
+    echo -e "  - Steps: 8 (distill). Resolution: 832x480 for the 60s/15-30min budget.\\n"
 }
 
 function provisioning_download() {
@@ -437,12 +364,9 @@ function provisioning_download() {
     local auth_header=""
     local filename=""
 
-    # Extract filename from URL (remove query parameters and get last path segment)
     filename=$(basename "${url%%\?*}")
 
     # For HuggingFace files, prefer hf_transfer (Rust multi-threaded) via the `hf` CLI.
-    # Roughly on par with aria2c -x12 on a fast host, but more resilient to HF
-    # per-connection throttling. Falls back to aria2c below on any failure.
     if [[ $url =~ ^https://huggingface\.co/(.+)/resolve/([^/]+)/(.+)$ ]]; then
         local repo="${BASH_REMATCH[1]}"
         local revision="${BASH_REMATCH[2]}"
@@ -464,14 +388,10 @@ function provisioning_download() {
         fi
     fi
 
-    # Detect HuggingFace URLs and add auth if token exists
     if [[ -n $HF_TOKEN && $url =~ ^https://([a-zA-Z0-9_-]+\\.)?huggingface\\.co(/|$|\\?) ]]; then
         auth_header="--header=Authorization: Bearer $HF_TOKEN"
     fi
 
-    # aria2c fallback / non-HF URLs (12 parallel connections, auto-resume)
-    # --file-allocation=none: Required for accurate disk usage monitoring during download
-    # --summary-interval=0: Suppress aria2c native progress summary to avoid clutter
     if [[ -n $auth_header ]]; then
         aria2c -x 12 -s 12 -k 1M -c --summary-interval=0 --console-log-level=warn \
             --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
@@ -481,8 +401,6 @@ function provisioning_download() {
             --allow-overwrite=true --auto-file-renaming=false --file-allocation=none \
             -o "$filename" -d "$dir" "$url"
     fi
-
-    # Note: No explicit error handling - continue on failures, check logs later
 }
 
 if [[ ! -f /.noprovisioning ]]; then
