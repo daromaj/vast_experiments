@@ -4,8 +4,8 @@ Interactive script to search vast.ai offers for both on-demand and interruptible
 Combines results, calculates estimated total hourly cost including:
 
 - Base rental cost (dph)
-- Storage cost for 120GB container
-- Download cost for 100GB of data (one-time, amortized over estimated usage)
+- Storage cost for the container disk (CONTAINER_SIZE_GB)
+- Download cost for the model payload (DATA_DOWNLOAD_GB, one-time)
 Then displays top 15 results sorted by estimated total price.
 Allows interactive selection with arrow keys to bid on instances.
 
@@ -20,18 +20,24 @@ import sys
 from typing import List, Dict, Optional
 
 # Search criteria
-MIN_GPU_RAM = 24  # GB (minimum for Wan2.1-I2V-14B with offloading)
-MIN_DISK_SPACE = 120  # GB (sufficient with cache cleanup)
-MAX_INET_COST = 0.002  # $/GB (= $2/TB)
-MIN_INET_DOWN_SPEED = 1000  # Mb/s
-
-# GPU filter - exclude incompatible GPUs
-# EXCLUDE_GPU_NAMES = ["RTX 5090", "RTX_5090"]  # sm_120 not supported by PyTorch 2.4.1
-EXCLUDE_GPU_NAMES = []
+MIN_GPU_RAM = 24  # GB (4090=24GB floor; 5090=32GB. query is in GB, raw JSON is MB)
+MIN_DISK_SPACE = 80  # GB (~34GB models + ComfyUI + venv + SageAttention build + outputs)
+MIN_INET_DOWN_SPEED = 5000  # Mb/s floor. Download speed is the real bottleneck, and a hard
+# floor (not the soft cost term below) is what guarantees fast hosts. 5 Gbps costs ~nothing on
+# price - the cheapest 5090s often already have 7+ Gbps. Drop to 2000-3000 if the pool looks thin.
+MAX_DPH = 0.60  # $/hr hard cap on rental price - very fast hosts get pricey, this reins it in
 
 # Cost calculation parameters
-CONTAINER_SIZE_GB = 120  # GB (sufficient with cache cleanup)
-DATA_DOWNLOAD_GB = 100  # GB - downloaded during the 1hr rental period
+CONTAINER_SIZE_GB = 80  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
+DATA_DOWNLOAD_GB = 34  # GB - actual model payload after dropping the unused fp8 encoder
+MAX_DOWNLOAD_COST = 1.0  # USD cap on total bandwidth for the payload (not a per-GB rate)
+# Per-GB bandwidth price cap derived from the total-cost target above.
+MAX_INET_COST = MAX_DOWNLOAD_COST / DATA_DOWNLOAD_GB  # $/GB
+
+# GPU filter - exclude incompatible GPUs
+# NOTE: RTX 5090 (Blackwell/sm_120) is the PRIMARY target now - SageAttention is built
+# for the detected host arch in povision_fp8.sh. Do not exclude it.
+EXCLUDE_GPU_NAMES = []
 
 
 def run_vastai_search(instance_type: str) -> List[Dict]:
@@ -44,7 +50,8 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
         f"disk_space >= {MIN_DISK_SPACE} "
         f"inet_down_cost < {MAX_INET_COST} "
         f"inet_up_cost < {MAX_INET_COST} "
-        f"inet_down >= {MIN_INET_DOWN_SPEED}"
+        f"inet_down >= {MIN_INET_DOWN_SPEED} "
+        f"dph_total <= {MAX_DPH}"
     )
 
     cmd = ["vastai", "search", "offers", query, "--raw"]
@@ -95,11 +102,22 @@ def calculate_total_cost(offer: Dict) -> float:
     storage_cost_per_gb_month = offer.get('storage_cost', 0) or 0
     storage_cost_hourly = (CONTAINER_SIZE_GB * storage_cost_per_gb_month) / (30 * 24)
 
-    # Download cost (full one-time cost for 100GB during the 1hr rental)
+    # Download cost (full one-time transfer charge for the model payload)
     inet_down_cost = offer.get('inet_down_cost', 0) or 0
     download_cost_total = DATA_DOWNLOAD_GB * inet_down_cost
 
-    total_cost = dph + storage_cost_hourly + download_cost_total
+    # Rental burned WHILE the payload downloads. This is the real reason a slow host is
+    # expensive: you pay dph the whole time it's pulling models. Converts speed -> $ so a
+    # cheaper-but-slower host is weighed fairly against a pricey-but-fast one.
+    inet_down_mbps = offer.get('inet_down', 0) or 0
+    if inet_down_mbps > 0:
+        download_seconds = (DATA_DOWNLOAD_GB * 8 * 1000) / inet_down_mbps  # GB->gigabit->megabit / Mbps
+    else:
+        download_seconds = 0
+    offer['download_minutes'] = download_seconds / 60
+    wasted_rental = dph * (download_seconds / 3600)
+
+    total_cost = dph + storage_cost_hourly + download_cost_total + wasted_rental
 
     return total_cost
 
@@ -108,7 +126,7 @@ def format_table_header() -> str:
     """
     Generate table header for results display.
     """
-    header_line = "# ID   Type GPU          VRAM Est$ Base$ Down Up Loc Rel TF\n"
+    header_line = "# ID   Type GPU          VRAM Est$ Base$ Down DLm Up Loc Rel TF\n"
     divider = "-" * len(header_line.rstrip()) + "\n"
     return header_line + divider
 
@@ -151,29 +169,42 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
     geolocation = offer.get('geolocation', 'N/A')[:2]
     reliability = offer.get('reliability', 0) * 100
 
-    row = f"{prefix}{rank:<1} {machine_id:<4} {instance_type:<4} {gpu_name:<12} {vram_str:<5} {total_cost:<5.4f} {dph:<5.4f} {down_str:<5} {up_str:<4} {geolocation:<2} {reliability:<3.1f} {tflops_str:<4}\n"
+    dl_str = f"{offer.get('download_minutes', 0):.0f}m"
+
+    row = f"{prefix}{rank:<1} {machine_id:<4} {instance_type:<4} {gpu_name:<12} {vram_str:<5} {total_cost:<5.4f} {dph:<5.4f} {down_str:<5} {dl_str:<4} {up_str:<4} {geolocation:<2} {reliability:<3.1f} {tflops_str:<4}\n"
 
     return row
 
 
-def create_bid_instance(offer: Dict):
+def create_instance(offer: Dict):
     """
-    Create a bid instance for the selected offer.
+    Create an instance for the selected offer.
+
+    Branches on the offer's instance_type: 'bid' (interruptible) requires --bid_price,
+    'on-demand' must NOT pass it (passing a bid price on an on-demand offer makes it
+    interruptible). Previously this always bid regardless of the selected type.
     """
     machine_id = offer['id']
+    instance_type = offer.get('instance_type', 'bid')
     dph = offer.get('dph_total', offer.get('dph', 0)) or 0
-    # Add 0.01 to bid price as suggested
-    bid_price = dph + 0.01
 
-    cmd = ["vastai", "create", "instance", str(machine_id), "--disk", "120", "--bid_price", str(bid_price), "--template_hash", "a3b79706f4f5ed8164bb1fadaeea2718"]
+    cmd = ["vastai", "create", "instance", str(machine_id),
+           "--disk", str(CONTAINER_SIZE_GB),
+           "--template_hash", "a3b79706f4f5ed8164bb1fadaeea2718"]
 
-    print(f"\n🖥️ Creating bid instance for machine {machine_id} with bid price ${bid_price:.2f}...")
+    if instance_type == "bid":
+        bid_price = dph + 0.01  # bid slightly above the shown price
+        cmd += ["--bid_price", str(bid_price)]
+        print(f"\n🖥️ Creating BID (interruptible) instance {machine_id} at bid ${bid_price:.3f}/hr...")
+    else:
+        print(f"\n🖥️ Creating ON-DEMAND instance {machine_id} at ${dph:.3f}/hr...")
+
     try:
-        result = subprocess.run(cmd, check=True, text=True)
-        print(f"✅ Bid instance created successfully!")
+        subprocess.run(cmd, check=True, text=True)
+        print(f"✅ Instance created successfully!")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to create bid instance: {e.stderr}")
+        print(f"❌ Failed to create instance (exit {e.returncode}): {e}")
         return False
 
 
@@ -191,7 +222,7 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight selected row
 
         # Get table width
-        header_line_example = "# ID   Type GPU          VRAM Est$ Base$ Down Up Loc Rel TF\n"
+        header_line_example = "# ID   Type GPU          VRAM Est$ Base$ Down DLm Up Loc Rel TF\n"
         header_width = len(header_line_example.rstrip())
 
         # Prepare lines
@@ -211,16 +242,15 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
 
         lines.append("=" * header_width)
         lines.append("")
-        lines.append(f"Est$/h = Base rental (1hr) + Storage ({CONTAINER_SIZE_GB}GB for 1hr) + Download cost ({DATA_DOWNLOAD_GB}GB one-time)")
+        lines.append(f"Est$/h = rental(1hr) + storage({CONTAINER_SIZE_GB}GB/1hr) + download charge({DATA_DOWNLOAD_GB}GB) + rental burned during download")
         lines.append("")
-        lines.append("WARNING: For BID instances, MUST use --bid_price when creating instance!")
-        lines.append("   Example: vastai create instance <ID> --disk 120 --bid_price <DPH+0.01>")
+        lines.append(f"Filters: dph<=${MAX_DPH}/hr, bandwidth<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB, inet_down>={MIN_INET_DOWN_SPEED}Mb/s, disk>={MIN_DISK_SPACE}GB")
         lines.append("")
-        lines.append("Filtered out: RTX 5090 (not compatible with PyTorch 2.4.1)")
+        lines.append(f"Down = host inet_down. DLm = est. minutes to pull {DATA_DOWNLOAD_GB}GB (the real time sink on slow hosts).")
         lines.append("")
-        lines.append("TIP: 120GB is enough if you clean up caches after downloads (see plan step 2.9.2)")
+        lines.append("BID offers create interruptible (auto --bid_price); on-demand offers create fixed-price.")
         lines.append("")
-        lines.append("Use UP/DOWN arrows to navigate, ENTER to bid, Q to quit")
+        lines.append("Use UP/DOWN arrows to navigate, ENTER to select, Q to quit")
 
         # Draw lines
         max_y, max_x = stdscr.getmaxyx()
@@ -307,14 +337,16 @@ def main():
         curses.endwin()  # Just in case
         return
 
-    # Bid on selected
+    # Create the selected instance (bid or on-demand per its type)
     selected_offer = top_offers[selected_idx]
-    print(f"Selected instance: ID {selected_offer['id']}")
-    confirm = input("Are you sure you want to bid on this instance? (y/n): ").strip().lower()
+    itype = selected_offer.get('instance_type', 'bid')
+    dph = selected_offer.get('dph_total', selected_offer.get('dph', 0)) or 0
+    print(f"Selected: ID {selected_offer['id']}  type={itype}  ~${dph:.3f}/hr")
+    confirm = input(f"Create this {itype} instance? (y/n): ").strip().lower()
     if confirm == 'y':
-        create_bid_instance(selected_offer)
+        create_instance(selected_offer)
     else:
-        print("Bid cancelled.")
+        print("Cancelled.")
 
 
 if __name__ == "__main__":
