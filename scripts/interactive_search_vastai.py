@@ -26,6 +26,9 @@ MIN_INET_DOWN_SPEED = 5000  # Mb/s floor. Download speed is the real bottleneck,
 # floor (not the soft cost term below) is what guarantees fast hosts. 5 Gbps costs ~nothing on
 # price - the cheapest 5090s often already have 7+ Gbps. Drop to 2000-3000 if the pool looks thin.
 MAX_DPH = 0.60  # $/hr hard cap on rental price - very fast hosts get pricey, this reins it in
+MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is ~31.5 GB/s
+# theoretical (~20-26 measured); PCIe 3.0 x16 and 4.0 x8 both cap at ~15.75. A 20 floor keeps
+# real 4.0 x16 hosts and drops the old/crippled slots (where V100/3090-era boards live).
 
 # Cost calculation parameters
 CONTAINER_SIZE_GB = 80  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
@@ -34,9 +37,24 @@ MAX_DOWNLOAD_COST = 1.0  # USD cap on total bandwidth for the payload (not a per
 # Per-GB bandwidth price cap derived from the total-cost target above.
 MAX_INET_COST = MAX_DOWNLOAD_COST / DATA_DOWNLOAD_GB  # $/GB
 
-# GPU filter - exclude incompatible GPUs
-# NOTE: RTX 5090 (Blackwell/sm_120) is the PRIMARY target now - SageAttention is built
-# for the detected host arch in povision_fp8.sh. Do not exclude it.
+# GPU filter - allowlist of card families we actually want.
+# Focus: RTX 4090/5090 "or better" == modern Ada/Blackwell cards with NATIVE fp8 and
+# >=4090-class compute. This is a substring match against gpu_name, so "L40" also
+# catches "L40S", "RTX 4090" catches "RTX 4090D", etc.
+# Deliberately excluded: A100 (Ampere, no native fp8), RTX 3090/A40 (Ampere), Tesla V100
+# (Volta), RTX PRO 4000 (below 4090 tier). Empty list => allow everything.
+# NOTE: RTX 5090 (Blackwell/sm_120) is the PRIMARY target - SageAttention is built for the
+# detected host arch in povision_fp8.sh.
+INCLUDE_GPU_NAMES = [
+    "RTX 4090",
+    "RTX 5090",
+    "L40",          # L40 / L40S - Ada datacenter, fp8, ~4090-class
+    "RTX 6000Ada",
+    "RTX 5880Ada",
+    "RTX PRO 6000",  # Blackwell workstation flagship
+]
+
+# GPU filter - exclude incompatible GPUs (applied after the allowlist, for one-off blocks)
 EXCLUDE_GPU_NAMES = []
 
 
@@ -51,6 +69,7 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
         f"inet_down_cost < {MAX_INET_COST} "
         f"inet_up_cost < {MAX_INET_COST} "
         f"inet_down >= {MIN_INET_DOWN_SPEED} "
+        f"pcie_bw >= {MIN_PCIE_BW} "
         f"dph_total <= {MAX_DPH}"
     )
 
@@ -72,6 +91,9 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
         filtered_offers = []
         for offer in offers:
             gpu_name = offer.get('gpu_name', '')
+            # Keep only allowlisted GPU families (empty list => allow everything)
+            if INCLUDE_GPU_NAMES and not any(inc in gpu_name for inc in INCLUDE_GPU_NAMES):
+                continue
             # Skip if GPU is in exclusion list
             if any(excluded in gpu_name for excluded in EXCLUDE_GPU_NAMES):
                 continue
@@ -244,7 +266,7 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         lines.append("")
         lines.append(f"Est$/h = rental(1hr) + storage({CONTAINER_SIZE_GB}GB/1hr) + download charge({DATA_DOWNLOAD_GB}GB) + rental burned during download")
         lines.append("")
-        lines.append(f"Filters: dph<=${MAX_DPH}/hr, bandwidth<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB, inet_down>={MIN_INET_DOWN_SPEED}Mb/s, disk>={MIN_DISK_SPACE}GB")
+        lines.append(f"Filters: dph<=${MAX_DPH}/hr, bandwidth<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB, inet_down>={MIN_INET_DOWN_SPEED}Mb/s, disk>={MIN_DISK_SPACE}GB, pcie_bw>={MIN_PCIE_BW}GB/s (4.0 x16)")
         lines.append("")
         lines.append(f"Down = host inet_down. DLm = est. minutes to pull {DATA_DOWNLOAD_GB}GB (the real time sink on slow hosts).")
         lines.append("")
