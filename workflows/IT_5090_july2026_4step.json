@@ -525,15 +525,13 @@
       ],
       "flags": {},
       "order": 5,
-      "mode": 0,
+      "mode": 4,
       "inputs": [],
       "outputs": [
         {
           "name": "model",
           "type": "MELROFORMERMODEL",
-          "links": [
-            543
-          ]
+          "links": []
         }
       ],
       "properties": {
@@ -605,26 +603,24 @@
       ],
       "flags": {},
       "order": 13,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "model",
           "type": "MELROFORMERMODEL",
-          "link": 543
+          "link": null
         },
         {
           "name": "audio",
           "type": "AUDIO",
-          "link": 554
+          "link": null
         }
       ],
       "outputs": [
         {
           "name": "vocals",
           "type": "AUDIO",
-          "links": [
-            544
-          ]
+          "links": []
         },
         {
           "name": "instruments",
@@ -780,8 +776,8 @@
           "name": "AUDIO",
           "type": "AUDIO",
           "links": [
-            554,
-            560
+            560,
+            544
           ]
         }
       ],
@@ -1534,16 +1530,8 @@
       "IMAGE"
     ],
     [
-      543,
-      301,
-      0,
-      302,
-      0,
-      "MELROFORMERMODEL"
-    ],
-    [
       544,
-      302,
+      125,
       0,
       194,
       1,
@@ -1572,14 +1560,6 @@
       128,
       0,
       "WANVIDEOMODEL"
-    ],
-    [
-      554,
-      125,
-      0,
-      302,
-      1,
-      "AUDIO"
     ],
     [
       556,
