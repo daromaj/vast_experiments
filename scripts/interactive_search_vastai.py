@@ -260,7 +260,7 @@ def create_instance(offer: Dict):
 
     cmd = ["vastai", "create", "instance", str(machine_id),
            "--disk", str(CONTAINER_SIZE_GB),
-           "--template_hash", "a3b79706f4f5ed8164bb1fadaeea2718"]
+           "--template_hash", "7f806603ccd0de9b7370266673c0a32d"]
 
     if instance_type == "bid":
         bid_price = dph + 0.01  # bid slightly above the shown price
@@ -313,7 +313,18 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         lines.append("")
         lines.append(f"Est$/h = rental(1hr) + storage({CONTAINER_SIZE_GB}GB/1hr) + download charge({DATA_DOWNLOAD_GB}GB) + rental burned during download")
         lines.append("")
-        lines.append(f"Filters: dph<=${MAX_DPH}/hr, bandwidth<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB, inet_down>={MIN_INET_DOWN_SPEED}Mb/s, disk>={MIN_DISK_SPACE}GB, pcie_bw>={MIN_PCIE_BW}GB/s (4.0 x16)")
+        gpu_filter = ", ".join(INCLUDE_GPU_NAMES) if INCLUDE_GPU_NAMES else "any"
+        for fline in [
+            "Applied filters (all must hold):",
+            f"  GPU allowlist : {gpu_filter}",
+            f"  gpu_ram       >= {MIN_GPU_RAM} GB",
+            f"  disk_space    >= {MIN_DISK_SPACE} GB",
+            f"  pcie_bw       >= {MIN_PCIE_BW} GB/s (PCIe 4.0 x16)",
+            f"  inet_down     >= {MIN_INET_DOWN_SPEED} Mb/s",
+            f"  inet_dn/up$   <  ${MAX_INET_COST:.4f}/GB (<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB)",
+            f"  dph_total     <= ${MAX_DPH}/hr",
+        ]:
+            lines.append(fline)
         lines.append("")
         lines.append(f"Down = host inet_down. DLm = est. minutes to pull {DATA_DOWNLOAD_GB}GB (the real time sink on slow hosts).")
         lines.append("")
