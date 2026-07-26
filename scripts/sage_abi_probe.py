@@ -29,6 +29,7 @@ fall back to the source build.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -73,6 +74,47 @@ def collect_environment():
     env["nvcc"] = out.splitlines()[-1] if rc == 0 and out else "not found"
 
     return env
+
+
+def check_arch_kernel(module_name, sm_tag):
+    """
+    Failure mode 4: the wheel imports, runs, and returns CORRECT results - but
+    has no kernel compiled for this GPU and is silently falling back.
+
+    This is the one that cost the most time. A wheel shipping only
+    _qattn_sm80/_qattn_sm89 was filed under an sm_120 path and served to every
+    RTX 5090 rental. It passed every check above (cosine 0.9993 vs SDPA), so the
+    build looked healthy, while in the actual workflow SageAttention used >=6GB
+    MORE VRAM than plain SDPA and OOMed WanVideoSampler at 29.3GiB where sdpa
+    completed at 23.4GiB. Correct output, wrong kernel.
+
+    SageAttention names its extensions _qattn_sm<arch>.*.so, so require one
+    matching this device. sm_120 also accepts sm_120a (the arch-conditional
+    variant nvcc emits for Blackwell).
+    """
+    result = {"sm_tag": sm_tag, "arch_kernel_present": False}
+    try:
+        mod = __import__(module_name)
+        pkg_dir = os.path.dirname(mod.__file__)
+    except Exception as e:  # noqa: BLE001
+        result["error"] = repr(e)
+        return result
+
+    sos = [f for f in os.listdir(pkg_dir) if f.endswith(".so")]
+    result["extensions"] = sorted(sos)
+
+    arch = (sm_tag or "").replace("sm_", "")
+    matches = [f for f in sos if f.startswith(f"_qattn_sm{arch}")]
+    result["arch_kernel_present"] = bool(matches)
+    result["matching"] = matches
+    if not matches:
+        # Name the trap explicitly - a passing cosine check does NOT rule it out.
+        result["warning"] = (
+            f"No _qattn_sm{arch} extension. SageAttention will fall back for "
+            f"this GPU: expect much higher VRAM than SDPA and possible OOM, "
+            f"even though numerical output stays correct."
+        )
+    return result
 
 
 def check_import(module_name):
@@ -177,9 +219,14 @@ def main():
     # sageattn3 is the separate Blackwell-only fp4 package; probe it too if present.
     report["modules"] = {}
     ok = False
+    arch_ok = True
     for module_name, entrypoint in (("sageattention", "sageattn"), ("sageattn3", "sageattn3")):
         import_result, mod = check_import(module_name)
         entry = {"import": import_result}
+        if module_name == "sageattention" and import_result.get("imported"):
+            entry["arch"] = check_arch_kernel(
+                module_name, report["environment"].get("sm_tag", ""))
+            arch_ok = entry["arch"].get("arch_kernel_present", False)
         if mod is not None and report["environment"].get("cuda_available"):
             # Prefer the documented entrypoint; fall back to whatever the module exposes.
             candidates = [entrypoint] + [
@@ -193,7 +240,15 @@ def main():
                     break
         report["modules"][module_name] = entry
 
-    report["verdict"] = "WHEEL_USABLE" if ok else "FALL_BACK_TO_SOURCE_BUILD"
+    # A wheel without a kernel for this GPU is worse than no wheel: it passes
+    # every correctness check and then quietly blows the VRAM budget. Treat a
+    # missing arch kernel as a reason to build from source.
+    if ok and not arch_ok:
+        report["verdict"] = "FALL_BACK_TO_SOURCE_BUILD"
+        report["reason"] = "correct output but no kernel for this GPU arch"
+        ok = False
+    else:
+        report["verdict"] = "WHEEL_USABLE" if ok else "FALL_BACK_TO_SOURCE_BUILD"
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))
@@ -202,6 +257,13 @@ def main():
         env = report["environment"]
         print("\n" + "=" * 60)
         print(f"VERDICT: {report['verdict']}")
+        if report.get("reason"):
+            print(f"REASON:  {report['reason']}")
+        arch = (report["modules"].get("sageattention") or {}).get("arch") or {}
+        if arch:
+            print(f"Arch kernel for {arch.get('sm_tag')}: "
+                  f"{'present' if arch.get('arch_kernel_present') else 'MISSING'} "
+                  f"({', '.join(arch.get('extensions', [])) or 'none'})")
         print(
             "ABI triple: torch={t} cuda={c} {cp} {sm}".format(
                 t=env.get("torch", "?"),

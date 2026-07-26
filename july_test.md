@@ -52,13 +52,65 @@ Same procedure. Only worth running if 4step shows quality problems, or to see th
 - [ ] No new color shift or washed-out look vs baseline
 - [ ] Face identity preserved (fp8 matmul is lossier than fp16 — check it didn't melt the face)
 
-## Record results (fill in)
+## Results — 2026-07-26, RTX 5090 (31.36 GiB), vast.ai 45930851
 
-| Workflow | Compile time (1st run) | Gen time (2nd run) | vs baseline | Quality verdict |
-|---|---|---|---|---|
-| baseline (re-run) | n/a | | — | |
-| july2026_4step | | | | |
-| july2026_5step | | | | |
+**Read this first: `attention_mode` must be `sdpa`, not `sageattn`.**
+
+Every workflow here OOMed in `WanVideoSampler` until that one node-122 input was
+changed. SageAttention was using **≥6 GB more VRAM than plain SDPA** — backwards
+for a fused kernel — because the prebuilt wheel we ship contains only
+`_qattn_sm80` / `_qattn_sm89` and has **no sm_120 kernel**, so it silently falls
+back on a 5090. It is dated 2025-12-13 (Ada/Ampere era) yet was filed under
+`python/sage/torch2.10.0-cu128-sm_120/`, and `sage_abi_probe.py` passed it
+because the fallback still computes *correct* output (cosine 0.9993 vs SDPA).
+The probe now also requires an arch-matching kernel. `sdpa` is the node's own
+default (`nodes_model_loading.py:1022`); these workflows had overridden it.
+
+Measured with `scripts/run_july_tests.py` (2 runs each; run 1 discarded as
+compile warmup). Input: 8 s clip @ 480×832, `blocks_to_swap=0`, all on `sdpa`.
+
+| Config | Steps | Scheduler | Tiled VAE | Compile | Warmup | **Gen time** | vs baseline |
+|---|---|---|---|---|---|---|---|
+| **s1_4step_untiled** | 4 | flowmatch_distill | no | max-autotune | 150.3 s | **117.8 s** | **1.80× faster** |
+| s0_4step_tiled | 4 | flowmatch_distill | yes | max-autotune | 171.7 s | 141.2 s | 1.50× |
+| s3_4step_nocomp | 4 | flowmatch_distill | yes | default | 174.2 s | 141.4 s | 1.50× |
+| s2_5step_tiled | 5 | dpm++_sde | yes | max-autotune | 195.2 s | 162.7 s | 1.30× |
+| s4_baseline_sdpa | 6 | dpm++_sde | yes | default | 231.7 s | 211.5 s | — |
+
+Conclusions:
+
+- **`tiled_vae` costs ~23 s** (141.2 → 117.8). It was only ever an OOM
+  workaround; with `sdpa` there is headroom without it. Turn it off.
+- **`max-autotune-no-cudagraphs` buys nothing**: 141.2 s vs 141.4 s for plain
+  `default`, while adding ~33 s to the first run. It is a net loss unless you
+  generate many clips in one session without restarting ComfyUI.
+- 4 steps + `flowmatch_distill` beats 5 steps by 45 s, as designed.
+
+Quality has NOT been assessed yet — these are speed numbers only. Compare the
+pulled videos before adopting 4-step as the default.
+
+Outputs pulled to `output/vast_45930851/` (gitignored, kept locally). The second
+file of each pair is the measured run:
+
+| File | Config |
+|---|---|
+| `InfiniteTalk_00003/00004` | s0_4step_tiled |
+| `InfiniteTalk_00005/00006` | **s1_4step_untiled** (fastest) |
+| `InfiniteTalk_00007/00008` | s2_5step_tiled |
+| `InfiniteTalk_00009/00010` | s3_4step_nocomp |
+| `InfiniteTalk_00011/00012` | s4_baseline_sdpa (6-step reference) |
+
+Compare `00006` (4-step) against `00012` (6-step baseline) — that is the
+quality question that decides whether the 1.80× is free.
+
+### Measurement trap worth keeping
+
+Re-queueing a byte-identical workflow does not regenerate anything: ComfyUI
+caches on node inputs and returns the previous result. This showed up as a
+"3.0 s generation" that emitted the same filename as the 171.5 s run before it.
+`run_july_tests.py` now bumps every `seed`/`noise_seed` per run, which forces
+real resampling while leaving the torch.compile cache warm — which is exactly
+what run 2 is meant to measure.
 
 ## Decision
 

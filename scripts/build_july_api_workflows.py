@@ -35,6 +35,7 @@ N_MELBAND_SAMPLER = "302"
 N_WAV2VEC_EMBEDS = "194"
 N_LOAD_AUDIO = "125"
 N_LOAD_IMAGE = "284"
+N_BLOCK_SWAP = "134"
 
 
 def bypass_melband(wf):
@@ -56,6 +57,35 @@ def make_variant(base, steps, scheduler):
 
 
 N_TEXT_ENCODE = "241"
+
+
+def set_load_device(wf, load_device):
+    """
+    The shipped workflow sets load_device="main_device", which WanVideoWrapper
+    treats as a unified-memory escape hatch: nodes_model_loading.py:1810 skips
+    `patcher.model.diffusion_model.to(offload_device)` entirely when it is set.
+    The fp16 model therefore stays pinned on the GPU and blocks_to_swap has
+    nothing left to reclaim - which is why raising it changed the OOM time by
+    0.1s. The node's own default is "offload_device", and its tooltip says
+    main_device is "NOT recommended with the larger models unless you have
+    48GB+ VRAM" (line 1087). This card has 32GB.
+    """
+    wf[N_MODEL_LOADER]["inputs"]["load_device"] = load_device
+
+
+def set_blocks_to_swap(wf, n):
+    """
+    The shipped workflow uses base_precision=fp16_fast with quantization=disabled,
+    so WanVideoModelLoader dequantizes the fp8 checkpoint to fp16: 14B params x 2
+    bytes = ~28.6GB, plus 2.5GB of InfiniteTalk. Measured resident set before
+    sampling is 29.33GiB against a 31.36GiB device limit, with blocks_to_swap=0
+    offloading nothing. WanVideoSampler then fails to allocate 320MB.
+
+    That is a knife-edge fit, not a broken workflow - it explains both why this
+    used to run and why it no longer does. blocks_to_swap offloads that many
+    transformer blocks to CPU RAM and is the knob intended for exactly this.
+    """
+    wf[N_BLOCK_SWAP]["inputs"]["blocks_to_swap"] = n
 
 
 def set_inputs(wf, image, audio):
@@ -99,6 +129,13 @@ def main():
     ap.add_argument("--text-encode-quantization", default="disabled",
                     choices=["disabled", "fp8_e4m3fn"],
                     help="disabled=bf16 10.58GB (as shipped); fp8_e4m3fn=~5.3GB")
+    ap.add_argument("--load-device", default="offload_device",
+                    choices=["main_device", "offload_device"],
+                    help="main_device pins the whole model in VRAM and disables "
+                         "block swapping; only viable with 48GB+")
+    ap.add_argument("--blocks-to-swap", type=int, default=0,
+                    help="offload N transformer blocks to CPU RAM; the fp16 "
+                         "baseline needs >0 to fit a 32GB card")
     ap.add_argument("--disk-cache", action="store_true",
                     help="cache prompt embeddings to disk so reruns skip encoding")
     args = ap.parse_args()
@@ -116,6 +153,8 @@ def main():
 
     for name, wf in variants.items():
         set_inputs(wf, args.image, args.audio)
+        set_blocks_to_swap(wf, args.blocks_to_swap)
+        set_load_device(wf, args.load_device)
         set_text_encode(wf, args.text_encode_device,
                         args.text_encode_quantization, args.disk_cache)
         path = os.path.join(args.outdir, f"IT_5090_{name}_API.json")
@@ -130,6 +169,8 @@ def main():
             f"melband={'bypassed' if N_MELBAND_SAMPLER not in wf else 'active'} "
             f"txtenc={wf[N_TEXT_ENCODE]['inputs']['device']}/"
             f"{wf[N_TEXT_ENCODE]['inputs']['quantization']} "
+            f"swap={wf[N_BLOCK_SWAP]['inputs']['blocks_to_swap']} "
+            f"load={wf[N_MODEL_LOADER]['inputs']['load_device']} "
             f"nodes={len(wf)}"
         )
         print(f"           -> {path}")

@@ -45,6 +45,26 @@ def wait_for_comfy(limit=300):
     return False
 
 
+def bump_seeds(workflow, run):
+    """
+    Give every seed-bearing node a fresh value.
+
+    ComfyUI caches execution on node inputs, so re-queueing a byte-identical
+    workflow returns the previous result without running anything: observed as a
+    3.0s "generation" that emitted the same output filename as the 171.5s run
+    before it. Varying the seed forces real resampling while leaving the
+    torch.compile cache warm, which is exactly what run 2 is supposed to measure.
+    """
+    changed = []
+    for nid, node in workflow.items():
+        inputs = node.get("inputs") or {}
+        for key in ("seed", "noise_seed"):
+            if isinstance(inputs.get(key), int):
+                inputs[key] = (inputs[key] + run * 1000 + 7) % (2**31)
+                changed.append(f"{nid}.{key}")
+    return changed
+
+
 def run_once(workflow, client_id, run_timeout):
     """Queue one generation, block until it leaves the queue, return timing."""
     t0 = time.time()
@@ -115,6 +135,9 @@ def main():
             label = "compile/warmup (discarded)" if run == 1 else "MEASURED"
             print(f"\n=== {name} run {run}/{args.runs} — {label} ===", flush=True)
             t = time.time()
+            seeded = bump_seeds(workflow, run)
+            print(f"    reseeded: {', '.join(seeded) or 'NONE - results may be cached!'}",
+                  flush=True)
             try:
                 r = run_once(workflow, client_id, args.run_timeout)
             except urllib.error.HTTPError as e:
