@@ -1,10 +1,19 @@
-.hf_home
+# Python
+__pycache__/
+*.pyc
+.venv/
 .venv-backups
+
+# Local caches / scratch
+.hf_home
 docker_data
-InfiniteTalk/
-input_files/
 tmp_outputs/
-InfiniteTalk/
 output/
+
+# Large inputs kept out of the repo
+input_files/
+
+# Cloned or built at provision time, never committed
+InfiniteTalk/
 SageAttention/
-lightx2v/LightX2V__pycache__/
+lightx2v/LightX2V/
