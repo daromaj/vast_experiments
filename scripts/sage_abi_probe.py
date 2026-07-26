@@ -210,13 +210,15 @@ def main():
                 sm=env.get("sm_tag", "?"),
             )
         )
+        # The ABI goes in the PATH, not the filename: PEP 427 requires a build tag
+        # to start with a digit, so "...-torch2.10.0-..." in the name is rejected
+        # by pip. Keep the wheel's own name intact and key the directory.
         print("If usable, commit the wheel as:")
         print(
-            "  python/sageattention-2.2.0-torch{t}-cu{c}-{sm}-{cp}.whl".format(
+            "  python/sage/torch{t}-cu{c}-{sm}/<original-wheel-name>.whl".format(
                 t=str(env.get("torch", "unknown")).split("+")[0],
                 c=str(env.get("torch_cuda", "unknown")).replace(".", ""),
                 sm=env.get("sm_tag", "unknown"),
-                cp=env.get("cp_tag", "unknown"),
             )
         )
         print("=" * 60)

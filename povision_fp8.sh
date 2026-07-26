@@ -96,14 +96,24 @@ SAGEATTENTION_WHEELS=(
     "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
 )
 
-# Prebuilt wheel to try per detected GPU arch, keyed by sm tag. These names do NOT
-# encode the torch ABI they were compiled against - that is exactly why the wheel
-# path was unreliable. Until a run tells us the working triple, we pick by arch and
-# let the probe below be the judge.
-declare -A SAGE_WHEEL_BY_ARCH=(
-    [sm_120]="https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
-    [sm_89]="https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
-)
+# Prebuilt wheels are stored under an ABI-keyed DIRECTORY:
+#
+#   python/sage/torch<ver>-cu<cuda>-sm_<arch>/<wheel>.whl
+#
+# The ABI cannot go in the filename: PEP 427 requires
+# {name}-{version}(-{build})?-{pytag}-{abitag}-{platform}.whl and a build tag must
+# start with a digit, so "sageattention-2.2.0-torch2.10.0-...whl" is rejected by
+# pip outright. The directory carries the ABI; the filename stays valid.
+#
+# Keying on the exact triple (not just the GPU arch) is the whole fix: a wheel is
+# only loadable against the torch it was linked to, so after an image bump the
+# lookup simply misses and we go straight to a source build instead of installing
+# something that will fail at import.
+#
+# Verified working: torch2.10.0-cu128-sm_120 on vastai/comfy:v0.28.0-cuda-12.9-py312
+# (probe passed, cosine 0.9993 vs SDPA, RTX 5090).
+SAGE_WHEEL_BASE="https://github.com/daromaj/vast_experiments/raw/master/python/sage"
+SAGE_WHEEL_FILE="sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
 
 # Viability probe: import + real GPU attention call + cosine check vs SDPA.
 # Exit 0 means the installed SageAttention is genuinely usable, which is the only
@@ -429,19 +439,21 @@ function provisioning_try_sage_wheel() {
     # let it replace a ~6 minute source build. Returns 0 only on a clean probe.
     local start_time=$(date +%s)
 
-    local sm_tag
-    sm_tag=$(python3 -c "import torch;c=torch.cuda.get_device_capability(0);print('sm_%d%d'%c)" 2>/dev/null)
-    if [[ -z $sm_tag ]]; then
-        echo "[SAGE_WHEEL] Could not detect GPU arch — skipping wheel attempt."
+    # The full ABI triple, read from the torch that is actually installed.
+    local abi_tag
+    abi_tag=$(python3 -c "
+import torch
+c = torch.cuda.get_device_capability(0)
+print('torch%s-cu%s-sm_%d%d' % (torch.__version__.split('+')[0],
+                                (torch.version.cuda or 'none').replace('.', ''),
+                                c[0], c[1]))" 2>/dev/null)
+    if [[ -z $abi_tag ]]; then
+        echo "[SAGE_WHEEL] Could not determine torch/GPU ABI — skipping wheel attempt."
         return 1
     fi
 
-    local wheel_url="${SAGE_WHEEL_BY_ARCH[$sm_tag]:-}"
-    if [[ -z $wheel_url ]]; then
-        echo "[SAGE_WHEEL] No wheel on file for ${sm_tag} — source build it is."
-        return 1
-    fi
-    echo "[SAGE_WHEEL] Detected ${sm_tag} -> $(basename "$wheel_url")"
+    local wheel_url="${SAGE_WHEEL_BASE}/${abi_tag}/${SAGE_WHEEL_FILE}"
+    echo "[SAGE_WHEEL] ABI ${abi_tag} -> ${wheel_url}"
 
     local wheel_dir="${WORKSPACE}/wheels"
     mkdir -p "$wheel_dir"
@@ -449,7 +461,15 @@ function provisioning_try_sage_wheel() {
 
     local wheel_file="${wheel_dir}/$(basename "$wheel_url")"
     if [[ ! -f $wheel_file ]]; then
-        echo "[SAGE_WHEEL] Download produced no file — skipping wheel attempt."
+        echo "[SAGE_WHEEL] No wheel cached for this ABI — source build it is."
+        return 1
+    fi
+    # A 404 can still leave a file on disk containing GitHub's error page. A real
+    # wheel is a zip archive ("PK") and is megabytes, not kilobytes.
+    if [[ $(stat -c %s "$wheel_file" 2>/dev/null || echo 0) -lt 1000000 ]] ||
+       [[ $(head -c 2 "$wheel_file") != "PK" ]]; then
+        echo "[SAGE_WHEEL] Downloaded file is not a wheel (404 page?) — source build it is."
+        rm -f "$wheel_file"
         return 1
     fi
 
@@ -484,10 +504,18 @@ function provisioning_harvest_sage_wheel() {
     if ( cd "$sage_dir" && python setup.py bdist_wheel --skip-build ); then
         echo "[SAGE_HARVEST] Wheel(s) written to ${sage_dir}/dist:"
         ls -la "${sage_dir}/dist"/*.whl 2>/dev/null
-        # The probe prints the ABI triple and the exact filename to commit under.
-        local probe="${WORKSPACE}/sage_abi_probe.py"
-        [[ -f $probe ]] && python3 "$probe" 2>&1 | sed 's/^/[SAGE_HARVEST] /'
-        echo "[SAGE_HARVEST] scp this back and commit it under python/ before the instance dies."
+        # Print the exact destination path so the wheel lands where the ABI-keyed
+        # lookup above will find it on the next rental.
+        local abi_tag
+        abi_tag=$(python3 -c "
+import torch
+c = torch.cuda.get_device_capability(0)
+print('torch%s-cu%s-sm_%d%d' % (torch.__version__.split('+')[0],
+                                (torch.version.cuda or 'none').replace('.', ''),
+                                c[0], c[1]))" 2>/dev/null)
+        echo "[SAGE_HARVEST] Commit it as: python/sage/${abi_tag}/${SAGE_WHEEL_FILE}"
+        echo "[SAGE_HARVEST] e.g.  scripts/vast.sh pull ${sage_dir}/dist/<wheel> ."
+        echo "[SAGE_HARVEST] scp this back and commit it before the instance dies."
     else
         echo "[SAGE_HARVEST] bdist_wheel failed (is the 'wheel' package installed?) — nothing to harvest."
     fi
