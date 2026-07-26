@@ -20,9 +20,16 @@ tiled_vae is the other headroom lever and is cheaper than it looks here: it cost
 23s on a 5090, but on a card that would otherwise have to swap more blocks it can
 come out ahead.
 
-q0 is expected to OOM. It is included deliberately - it establishes the ceiling
-rather than assuming it, and it is the only run that tells us whether the ~1GiB
-estimate was right.
+MEASURED 2026-07-27, first pass: q0 OOMed in WanVideoSampler after 407.5s and q1
+OOMed too, so tiled VAE alone does not close the gap either. The failures also
+reported the real ceiling: torch says "Device limit: 23.52 GiB", not the 23.99GiB
+the 24,564MB nameplate suggests - roughly 480MB goes to driver and context. The
+gap versus the 5090's ~24.4GiB peak is therefore ~0.9GiB of *usable* memory, and
+some block swapping is mandatory on this card.
+
+Second pass drops swap=0 as settled and brackets the minimum from below (2, 4)
+rather than starting at the 6 the arithmetic predicted, since the true floor is
+what determines the fastest config.
 """
 import argparse
 import copy
@@ -38,12 +45,44 @@ N_LOAD_AUDIO = "125"
 
 # name, blocks_to_swap, tiled_vae
 CANDIDATES = [
-    ("q0_swap00_untiled", 0, False),   # does it actually fit? expected OOM
-    ("q1_swap00_tiled", 0, True),      # tiled VAE alone might close a ~1GiB gap
+    ("q0_swap00_untiled", 0, False),   # MEASURED: OOM at 407.5s in WanVideoSampler
+    ("q1_swap00_tiled", 0, True),      # MEASURED: OOM - tiled VAE alone is not enough
     ("q2_swap06_untiled", 6, False),   # what the per-block arithmetic predicts
     ("q3_swap06_tiled", 6, True),      # belt and braces
     ("q4_swap12_untiled", 12, False),  # halfway to the shipped default
     ("q5_swap20_tiled", 20, True),     # the shipped default, as the control
+]
+
+# Second pass. ~0.9GiB to shed at ~443MB per block is 2-3 blocks, so the floor is
+# probably below the 6 that pass one started from; every block above the floor is
+# CPU->GPU traffic on every forward, paid for nothing.
+CANDIDATES_PASS2 = [
+    ("q6_swap02_untiled", 2, False),   # bare minimum the arithmetic allows
+    ("q7_swap04_untiled", 4, False),   # one block of margin
+    ("q2_swap06_untiled", 6, False),
+    ("q4_swap12_untiled", 12, False),
+    ("q3_swap06_tiled", 6, True),
+    ("q5_swap20_tiled", 20, True),
+]
+
+
+# Third pass, and the result that matters. Pass two refuted the premise of the
+# whole sweep: swap=4 and swap=6 both ran at ~255s while swap=12 ran at 108.9s.
+# More swapping is FASTER here, 2.4x so.
+#
+# The peak-VRAM column explains it. swap=4 and swap=6 both sat at ~24,076MB,
+# which is the 23.52GiB device limit exactly; swap=12 peaked at 21,782MB and was
+# the first variant with actual headroom. Pinned against the ceiling the caching
+# allocator thrashes - synchronous frees and cudaMalloc retries - and that costs
+# far more than moving 8 extra blocks across PCIe. "Just barely fits" is the
+# worst operating point on this card, not the best.
+#
+# So the question is no longer "what is the minimum that fits" but "where does
+# the headroom benefit stop paying for the transfer cost", which is above 12.
+CANDIDATES_PASS3 = [
+    ("q8_swap16_untiled", 16, False),
+    ("q9_swap20_untiled", 20, False),  # shipped default's swap count, untiled
+    ("qa_swap28_untiled", 28, False),  # past the point transfers should dominate
 ]
 
 
@@ -64,12 +103,19 @@ def main():
     ap.add_argument("--image", default="santa-classic-portrait.png")
     ap.add_argument("--audio", default="santa_8s.mp3")
     ap.add_argument("--outdir", default="workflows/generated/sweep4090")
+    ap.add_argument("--pass2", action="store_true",
+                    help="emit the post-OOM candidate set instead of the first pass")
+    ap.add_argument("--pass3", action="store_true",
+                    help="emit the high-swap set, after more swap proved faster")
     args = ap.parse_args()
 
     base = json.load(open(BASE))
     os.makedirs(args.outdir, exist_ok=True)
 
-    for name, swap, tiled in CANDIDATES:
+    sets = {True: CANDIDATES_PASS3} if args.pass3 else {True: CANDIDATES_PASS2}
+    chosen = sets[True] if (args.pass2 or args.pass3) else CANDIDATES
+
+    for name, swap, tiled in chosen:
         wf = build(base, swap, tiled, args.image, args.audio)
         path = os.path.join(args.outdir, f"{name}_API.json")
         with open(path, "w") as fh:

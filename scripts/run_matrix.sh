@@ -22,6 +22,26 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-2400}"
 
 mkdir -p "$RESULTS" "$LOGS"
 
+restart_comfy() {
+    # A variant that OOMs leaves its allocation behind: after one such failure
+    # the next workflow died in 3.0s inside WanVideoModelLoader with 21.97 GiB
+    # still held, and every remaining variant with it. Without this the matrix
+    # reports six failures when only the first one is a real measurement.
+    #
+    # The inductor cache is on disk, so a restart costs a model reload, not a
+    # recompile.
+    supervisorctl restart comfyui >/dev/null 2>&1
+    for _ in $(seq 1 60); do
+        if curl -s -m 5 http://127.0.0.1:18188/system_stats >/dev/null 2>&1; then
+            sleep 2
+            return 0
+        fi
+        sleep 5
+    done
+    echo "    WARNING: ComfyUI did not come back after restart"
+    return 1
+}
+
 poll_vram() {
     # $1 = output file. Highest reserved-MiB reading wins.
     local out="$1" peak=0 cur
@@ -42,6 +62,8 @@ for wf in "$@"; do
     vram="$LOGS/${name}.vram"
 
     echo "=== $name -> $log ==="
+    restart_comfy
+
     poll_vram "$vram" &
     poller=$!
 
