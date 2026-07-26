@@ -114,6 +114,72 @@ vastai copy INSTANCE_ID:/workspace/ComfyUI/output local:output
 
 ## execution time for ~60s video
 
+### 2026-07-26 — current numbers (RTX 5090, measured)
+
+**58 s audio (1455 frames, 21 windows) @ 480x832: 9 m 50 s**, down from 13 m 29 s.
+
+The old figures below were bottlenecked by a SageAttention wheel built for the
+wrong GPU. It was cached under `python/sage/torch2.10.0-cu128-sm_120/` but
+compiled for Ada, so on a 5090 sage fell back silently — correct output, but
+>=6 GB more VRAM than SDPA, which OOMed `WanVideoSampler` at 29.3 GiB. Rebuilt
+with `TORCH_CUDA_ARCH_LIST=12.0` it is the fastest backend by a wide margin.
+A wheel's filename tells you nothing about its target: SageAttention 2.2.0 always
+emits `_qattn_sm80` / `_qattn_sm89` because those are the kernel *sources*.
+
+8 s clip, run 2 of 2 (run 1 discarded — it pays the torch.compile warmup):
+
+| Config | Attention | Steps | Gen time | vs baseline |
+|---|---|---|---|---|
+| sage + 4-step + quick wins + node patch | sageattn | 4 | **72.3 s** | **2.93x** |
+| sage + 4-step + quick wins | sageattn | 4 | 81.7 s | 2.59x |
+| sage + 4-step distill | sageattn | 4 | 87.7 s | 2.41x |
+| sdpa + 4-step distill | sdpa | 4 | 117.8 s | 1.80x |
+| old 6-step baseline | sdpa | 6 | 211.5 s | — |
+
+The 9 m 50 s full-clip figure above predates the last two rounds; it was measured
+at the 87.7 s config. The 72.3 s config should land nearer 8 minutes but that has
+not been measured on a full 58 s clip — do not quote it as if it had been.
+
+Isolated attention kernel at the real shape (40 heads x 32,760 tokens x 128 dim):
+**sageattn 39.1 ms vs sdpa 106.9 ms**.
+
+720p (1280x720) does fit on a 5090 at `blocks_to_swap=0` — 27.8 GiB peak with
+`tiled_vae=true` — but costs ~4.4x wall-clock, and there is no 720p lightx2v
+distill LoRA published (only 480p ranks exist), so the 4-step LoRA is a mismatch
+at that resolution. See `july_test.md`.
+
+Full method, per-setting attribution and the source audit behind the quick wins:
+`july_test.md` and `notes/node_optimization_audit.md`.
+
+### Disk sizing
+
+Measured on a live 5090 rental after a full provision + several renders:
+
+| Item | Size |
+|---|---|
+| `/workspace/ComfyUI/models` | 32 GB |
+| — `diffusion_models` (Wan 14B fp8 + InfiniteTalk) | 19 GB |
+| — `text_encoders` (umt5-xxl) | 11 GB |
+| — clip_vision / loras / vae / wav2vec2 / transformers | ~2.7 GB |
+| `/venv` | 8.8 GB |
+| torch inductor cache (grows with compiles) | 1.6 GB |
+| custom_nodes + SageAttention build | 0.6 GB |
+| **fixed setup total** | **~43 GB** |
+
+Per generated video the marginal cost is tiny — ComfyUI writes both a silent
+`.mp4` and an `-audio.mp4`:
+
+| Videos @ 1 min | Output size | Total disk |
+|---|---|---|
+| 1 | ~16 MB | ~43 GB |
+| 10 | ~160 MB | ~43 GB |
+
+**So `--disk 60` is comfortable and `--disk 50` is workable; the models dominate
+and video count is irrelevant at this scale.** Adding the 720P checkpoint would
+push the fixed cost to ~60 GB, so budget `--disk 80` if you provision both.
+
+### older figures (pre-fix, kept for reference)
+
 Mon Dec  8 22:20:07 UTC 2025
 ** ComfyUI startup time: 2025-12-08 22:22:31.139
 

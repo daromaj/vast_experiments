@@ -78,12 +78,46 @@ compile warmup). Input: 8 s clip @ 480×832, `blocks_to_swap=0`.
 
 | Config | Attention | Steps | Scheduler | Tiled VAE | Compile | Warmup | **Gen time** | vs baseline |
 |---|---|---|---|---|---|---|---|---|
-| **s5_sage_untiled** | sageattn | 4 | flowmatch_distill | no | max-autotune | 120.1 s | **87.7 s** | **2.41× faster** |
+| **s9_sage_patched** | sageattn | 4 | flowmatch_distill | no | max-autotune | 193.3 s | **72.3 s** | **2.93× faster** |
+| s8_sage_quickwins | sageattn | 4 | flowmatch_distill | no | max-autotune | 646.5 s | 81.7 s | 2.59× |
+| s5_sage_untiled | sageattn | 4 | flowmatch_distill | no | max-autotune | 120.1 s | 87.7 s | 2.41× |
 | s1_4step_untiled | sdpa | 4 | flowmatch_distill | no | max-autotune | 150.3 s | 117.8 s | 1.80× |
 | s0_4step_tiled | sdpa | 4 | flowmatch_distill | yes | max-autotune | 171.7 s | 141.2 s | 1.50× |
 | s3_4step_nocomp | sdpa | 4 | flowmatch_distill | yes | default | 174.2 s | 141.4 s | 1.50× |
 | s2_5step_tiled | sdpa | 5 | dpm++_sde | yes | max-autotune | 195.2 s | 162.7 s | 1.30× |
 | s4_baseline_sdpa | sdpa | 6 | dpm++_sde | yes | default | 231.7 s | 211.5 s | — |
+
+### The two rounds of optimization on top of sage
+
+`s8` and `s9` come from a source audit of ComfyUI-WanVideoWrapper
+(`notes/node_optimization_audit.md`, cites checked against the installed copy,
+which was byte-identical to the audited HEAD).
+
+**s8 — three changes, no code** (`scripts/apply_quick_wins.py`, and
+`apply_quick_wins_gui.py` for the shipped GUI-format workflows):
+
+| | Change | Evidence it worked |
+|---|---|---|
+| R1 | `WanVideoTextEncodeCached.use_disk_cache` false → **true** | log shows `Loading prompt embeds from cache: .../text_embed_cache/4dc8d4ae….pt` — umt5-xxl (~11 GB) never loads |
+| R2 | wire `WanVideoTorchCompileSettings` → `WanVideoVAELoader.compile_args` | compiles `vae.model.decoder` (`nodes_model_loading.py:1925-1926`), which runs 21 launch-bound calls per window |
+| R5 | `WanVideoSampler.force_offload` true → **false** | post-run only; stops pushing ~16 GB to CPU between queued runs |
+
+The node default for `use_disk_cache` is `true` (`nodes.py:200`) — the workflow
+had overridden it to `false`, which is why the T5 was reloading every run.
+
+Note R2's price: **the first run after a restart costs 646.5 s** while inductor
+autotunes the decoder convs. It is amortized from run 2 onward and cached on
+disk, but on a one-shot rental that generates a single clip, R2 is a net loss.
+
+**s9 — two code patches** (`scripts/patch_multitalk_loop.py`, env-gated so the
+same file runs both arms of the A/B):
+
+| | Change | Why it is safe |
+|---|---|---|
+| R3 | cache the 81-frame `y` VAE encode | With one start image, `cond_` is always `cond_image` and the other 80 frames are zeros, so `vae.encode` returns a bit-identical tensor every window. Cache is keyed on a fingerprint of the real tensor, not on that assumption, so a changing input simply misses. Log confirms `MISS` then `HIT`. |
+| R6 | skip the per-window `soft_empty_cache()`×2 + `gc.collect()` | No numerical effect. These hold peak VRAM down; there was 6.5 GiB of headroom. Put back first if you raise `frame_window_size`. |
+
+Together: 81.7 → **72.3 s**.
 
 Conclusions:
 

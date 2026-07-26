@@ -2,7 +2,7 @@
   "id": "8b7a9a57-2303-4ef5-9fc2-bf41713bd1fc",
   "revision": 0,
   "last_node_id": 319,
-  "last_link_id": 561,
+  "last_link_id": 562,
   "nodes": [
     {
       "id": 237,
@@ -253,7 +253,8 @@
           "name": "torch_compile_args",
           "type": "WANCOMPILEARGS",
           "links": [
-            552
+            552,
+            562
           ]
         }
       ],
@@ -305,7 +306,7 @@
         "widget_ue_connectable": {}
       },
       "widgets_values": [
-        "If you have Triton installed, connect the Torch Compile Args for ~30% speed increase 👉"
+        "If you have Triton installed, connect the Torch Compile Args for ~30% speed increase \ud83d\udc49"
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -482,7 +483,7 @@
           "name": "compile_args",
           "shape": 7,
           "type": "WANCOMPILEARGS",
-          "link": null
+          "link": 562
         }
       ],
       "outputs": [
@@ -1165,7 +1166,7 @@
         11.000000000000002,
         82364052016591,
         "randomize",
-        true,
+        false,
         "flowmatch_distill",
         0,
         1,
@@ -1237,7 +1238,7 @@
         "Santa Claus presenting to the camera in the style of a professional news anchor. He maintains a stiff, formal posture. He is speaking clearly. Shoulders are square to the camera and immobile. Minimal body language. The movement is isolated to the mouth and eyes.",
         "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards\nLeaning forward, rocking, shifting weight, shaking, large gestures, moving shoulders, standing up, morphing, zooming in",
         "disabled",
-        false,
+        true,
         "gpu"
       ],
       "color": "#432",
@@ -1608,6 +1609,14 @@
       122,
       2,
       "WANVIDLORA"
+    ],
+    [
+      562,
+      177,
+      0,
+      129,
+      0,
+      "WANCOMPILEARGS"
     ]
   ],
   "groups": [
