@@ -273,12 +273,61 @@ function provisioning_start() {
         phase "SAGE: UNAVAILABLE — workflows using sageattn will fail"
     fi
 
+    provisioning_apply_wanvideo_patch
+
     provisioning_report_disk
 
     # Kill monitor loop
     kill $MONITOR_PID 2>/dev/null
 
     provisioning_print_end "$provisioning_start_time"
+}
+
+function provisioning_apply_wanvideo_patch() {
+    # Two source-level wins in ComfyUI-WanVideoWrapper's multitalk loop, measured
+    # on an RTX 5090 8s clip: 81.7s -> 72.3s.
+    #
+    #   R3  the 81-frame `y` VAE encode produces a bit-identical tensor in every
+    #       window when the workflow has a single start image, yet is recomputed
+    #       each time - roughly half the per-window VAE work.
+    #   R6  soft_empty_cache() x2 + gc.collect() run every window, handing the
+    #       caching allocator's blocks back to the driver so the next window
+    #       re-cudaMallocs its whole working set.
+    #
+    # Both are gated behind environment variables and default to OFF in the
+    # patched file, so the flags below are what actually enable them. If a future
+    # WanVideoWrapper release moves the code, the patcher refuses rather than
+    # writing something plausible - provisioning continues either way, just
+    # without the speedup.
+    phase "WANOPT: patching WanVideoWrapper multitalk loop"
+
+    local patch_url="https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/scripts/patch_multitalk_loop.py"
+    provisioning_download "$patch_url" "$WORKSPACE"
+    local patcher="${WORKSPACE}/patch_multitalk_loop.py"
+
+    if [[ ! -f $patcher ]]; then
+        echo "[WANOPT] patcher unavailable — skipping (not fatal)"
+        return 0
+    fi
+
+    if ! python3 "$patcher" 2>&1 | sed 's/^/[WANOPT] /'; then
+        echo "[WANOPT] patch did not apply — continuing unpatched"
+        return 0
+    fi
+
+    # The patched code reads os.environ at call time, and ComfyUI runs under
+    # supervisor, so the variables have to be in ITS environment - exporting them
+    # here would do nothing.
+    local conf=/etc/supervisor/conf.d/comfyui.conf
+    if [[ -f $conf ]] && ! grep -q WANOPT_Y_CACHE "$conf"; then
+        sed -i 's|^\(environment=PROC_NAME="%(program_name)s"\)$|\1,WANOPT_Y_CACHE="1",WANOPT_KEEP_CACHE_WARM="1"|' "$conf"
+        supervisorctl reread >/dev/null 2>&1
+        supervisorctl update >/dev/null 2>&1
+        supervisorctl restart comfyui >/dev/null 2>&1
+        echo "[WANOPT] flags enabled: $(grep '^environment=' "$conf")"
+    fi
+
+    phase "WANOPT: done"
 }
 
 function provisioning_monitor_loop() {
