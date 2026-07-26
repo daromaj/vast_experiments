@@ -220,6 +220,8 @@ function provisioning_start() {
         phase "SAGE: UNAVAILABLE — workflows using sageattn will fail"
     fi
 
+    provisioning_report_disk
+
     # Kill monitor loop
     kill $MONITOR_PID 2>/dev/null
 
@@ -385,6 +387,34 @@ function provisioning_build_sageattention() {
     local minutes=$((duration / 60))
     local seconds=$((duration % 60))
     echo "SageAttention build complete. Duration: ${minutes}m ${seconds}s"
+}
+
+function provisioning_report_disk() {
+    # --disk is currently guessed at (80GB) rather than measured. Record what the
+    # box ACTUALLY consumed so the next size is a decision instead of a guess:
+    # over-provisioning burns storage $/hr, under-provisioning kills the run at 90%.
+    echo "[DISK] --- actual consumption ---"
+
+    df -BM "${WORKSPACE}" 2>/dev/null | awk 'NR==2 {
+        gsub(/M/,"",$2); gsub(/M/,"",$3); gsub(/M/,"",$4)
+        printf "[DISK] filesystem total=%dGB used=%dGB avail=%dGB use=%s\n", $2/1024, $3/1024, $4/1024, $5
+        printf "[DISK_DATA] {\"total_gb\": %d, \"used_gb\": %d, \"avail_gb\": %d}\n", $2/1024, $3/1024, $4/1024
+    }'
+
+    # Per-directory, so we can see whether trimming models or the build tree pays.
+    # LC_ALL=C: du renders "4.8M" or "4,8M" depending on locale, and the log should
+    # not change shape based on which host we landed on.
+    local d
+    for d in "${COMFYUI_DIR}/models" "${COMFYUI_DIR}/custom_nodes" "${WORKSPACE}/SageAttention" "${WORKSPACE}/wheels"; do
+        [[ -d $d ]] || continue
+        echo "[DISK] $(LC_ALL=C du -sh "$d" 2>/dev/null | awk '{print $1}')	${d}"
+    done
+
+    # The SageAttention build tree is pure scratch once the package is installed.
+    # Not deleted automatically here - measure first, decide after a real run.
+    if [[ -d "${WORKSPACE}/SageAttention/build" ]]; then
+        echo "[DISK] $(LC_ALL=C du -sh "${WORKSPACE}/SageAttention/build" 2>/dev/null | awk '{print $1}')	<- build scratch, reclaimable"
+    fi
 }
 
 function provisioning_try_sage_wheel() {

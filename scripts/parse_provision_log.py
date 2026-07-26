@@ -24,6 +24,8 @@ WHEEL_RE = re.compile(r"\[SAGE_WHEEL\]\s+(.*)")
 VERDICT_RE = re.compile(r"probe verdict=(\d+)")
 BUILD_RE = re.compile(r"SageAttention build complete\. Duration:\s+(\d+)m\s+(\d+)s")
 TOTAL_RE = re.compile(r"Total provisioning time:\s+(\d+)m\s+(\d+)s")
+DISK_DATA_RE = re.compile(r"\[DISK_DATA\]\s+(\{.*\})")
+DISK_DIR_RE = re.compile(r"\[DISK\]\s+(\S+)\t(.+)")
 
 
 def parse(text):
@@ -59,6 +61,21 @@ def parse(text):
         m = BUILD_RE.search(line)
         if m:
             report["sage"]["source_build_s"] = int(m.group(1)) * 60 + int(m.group(2))
+            continue
+
+        m = DISK_DATA_RE.search(line)
+        if m:
+            try:
+                report["disk"] = json.loads(m.group(1))
+            except ValueError:
+                pass
+            continue
+
+        m = DISK_DIR_RE.search(line)
+        if m:
+            report.setdefault("disk_dirs", []).append(
+                {"size": m.group(1), "path": m.group(2).strip()}
+            )
             continue
 
         m = TOTAL_RE.search(line)
@@ -125,6 +142,32 @@ def render(report):
         out.append(f"  source build    : {fmt(sage['source_build_s'])}")
     for line in sage.get("wheel_log", []):
         out.append(f"    | {line}")
+
+    disk = report.get("disk")
+    if disk or report.get("disk_dirs"):
+        out.append("")
+        out.append("=" * 68)
+        out.append("DISK")
+        out.append("=" * 68)
+        if disk:
+            out.append(
+                f"  provisioned {disk['total_gb']}GB, used {disk['used_gb']}GB, "
+                f"{disk['avail_gb']}GB free"
+            )
+        for d in report.get("disk_dirs", []):
+            out.append(f"  {d['size']:>8}  {d['path']}")
+        if disk:
+            # Headroom for outputs and ComfyUI's cache, on top of what provisioning
+            # left behind. Under 10GB is where a long render starts risking ENOSPC.
+            used = disk["used_gb"]
+            if disk["avail_gb"] < 10:
+                out.append(f"  -> TIGHT: only {disk['avail_gb']}GB free. Raise --disk.")
+            else:
+                suggested = used + 15
+                out.append(
+                    f"  -> {used}GB consumed; --disk {suggested} would leave ~15GB "
+                    f"for outputs (currently provisioning {disk['total_gb']}GB)."
+                )
 
     out.append("")
     out.append("=" * 68)
