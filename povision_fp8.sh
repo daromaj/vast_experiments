@@ -128,6 +128,24 @@ SAGEATTENTION_WHEELS=(
 #
 # Verified working: torch2.10.0-cu128-sm_120 on vastai/comfy:v0.28.0-cuda-12.9-py312
 # (probe passed, cosine 0.9993 vs SDPA, RTX 5090).
+#
+# IMPORTANT (measured 2026-07-26, RTX 5090 / 31.36GiB): a passing probe does NOT
+# mean the workflows can use SageAttention. The kernel is correct in isolation
+# but blows the VRAM budget at real WanVideo shapes. Same workflow, same clip,
+# only node 122 attention_mode differing:
+#
+#   attention_mode=sageattn -> OOM in WanVideoSampler at 29.3GiB allocated
+#   attention_mode=sdpa     -> completes, 23.4GiB peak, 187.6s
+#
+# So sage costs >=6GB MORE than sdpa here, which is backwards for a fused kernel
+# and points at a fallback to materialised attention at ~32.8k tokens (an 81-frame
+# 480x832 window) rather than a bad build. The workflows had overridden the node's
+# own default, which is sdpa (nodes_model_loading.py:1022).
+#
+# Consequence for provisioning: if sdpa stays competitive on speed, this whole
+# build/wheel path is dead weight and can be dropped to save the SageAttention
+# stage entirely. Do not remove it until the speed comparison is recorded in
+# july_test.md - it is only worth keeping if sage is faster where it fits.
 SAGE_WHEEL_BASE="https://github.com/daromaj/vast_experiments/raw/master/python/sage"
 SAGE_WHEEL_FILE="sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
 

@@ -59,13 +59,22 @@ N_I2V_MULTITALK = "192"
 #
 # Ordered most-frugal-first: find something that completes, then walk back
 # toward speed by relaxing one knob at a time.
-# name, quant, swap, window, steps, scheduler, compile, force_offload, tiled_vae
+# SOLVED 2026-07-26: attention_mode=sageattn was the OOM. Every sage run died at
+# ~29GiB in WanVideoSampler; switching node 122 to sdpa completed in 187.6s on
+# the same instance, same clip, everything else equal. sdpa is also the node's
+# own default (nodes_model_loading.py:1022) - the workflow had overridden it.
+# The image ships only `sageattention` (no flash_attn, no sageattn3), so sdpa is
+# the backend to use here.
+#
+# These candidates now sweep SPEED, not survival. Two runs each: the first pays
+# max-autotune compile cost, only the second is a real generation time.
+# name, quant, swap, window, steps, scheduler, compile, force_offload, tiled_vae, attention
 CANDIDATES = [
-    ("g0_offload_tiled",  "fp8_e4m3fn_fast", 10, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", True,  True),
-    ("g1_tiled_only",     "fp8_e4m3fn_fast",  0, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, True),
-    ("g2_offload_only",   "fp8_e4m3fn_fast",  0, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", True,  False),
-    ("g3_tiled_5step",    "fp8_e4m3fn_fast",  0, 81, 5, "dpm++_sde",         "max-autotune-no-cudagraphs", False, True),
-    ("g4_tiled_baseline", "disabled",         0, 81, 6, "dpm++_sde",         "default",                    False, True),
+    ("s0_4step_tiled",   "fp8_e4m3fn_fast", 0, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, True,  "sdpa"),
+    ("s1_4step_untiled", "fp8_e4m3fn_fast", 0, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, False, "sdpa"),
+    ("s2_5step_tiled",   "fp8_e4m3fn_fast", 0, 81, 5, "dpm++_sde",         "max-autotune-no-cudagraphs", False, True,  "sdpa"),
+    ("s3_4step_nocomp",  "fp8_e4m3fn_fast", 0, 81, 4, "flowmatch_distill", "default",                    False, True,  "sdpa"),
+    ("s4_baseline_sdpa", "disabled",        0, 81, 6, "dpm++_sde",         "default",                    False, True,  "sdpa"),
 ]
 
 
@@ -76,10 +85,11 @@ def bypass_melband(wf):
 
 
 def build(base, quant, swap, window, steps, scheduler, compile_mode,
-          force_offload, tiled_vae, image, audio):
+          force_offload, tiled_vae, attention, image, audio):
     wf = copy.deepcopy(base)
     m = wf[N_MODEL_LOADER]["inputs"]
     m["quantization"] = quant
+    m["attention_mode"] = attention
     # Keep main_device even when swapping. With block_swap_args present the
     # loader already picks offload_device per block at load time
     # (nodes_model_loading.py:912-920), so swapping works here - while
@@ -114,14 +124,14 @@ def main():
     base = json.load(open(BASE))
     os.makedirs(args.outdir, exist_ok=True)
 
-    for name, quant, swap, window, steps, sched, cmode, foff, tvae in CANDIDATES:
+    for name, quant, swap, window, steps, sched, cmode, foff, tvae, attn in CANDIDATES:
         wf = build(base, quant, swap, window, steps, sched, cmode,
-                   foff, tvae, args.image, args.audio)
+                   foff, tvae, attn, args.image, args.audio)
         path = os.path.join(args.outdir, f"{name}_API.json")
         with open(path, "w") as fh:
             json.dump(wf, fh, indent=1)
         print(f"{name:<18} quant={quant:<16} swap={swap:<3} window={window:<3} "
-              f"steps={steps} sched={sched:<18} force_offload={foff} tiled_vae={tvae}")
+              f"steps={steps} sched={sched:<18} tiled_vae={tvae} attn={attn}")
         print(f"    -> {path}")
 
 
