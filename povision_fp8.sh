@@ -96,6 +96,30 @@ SAGEATTENTION_WHEELS=(
     "https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
 )
 
+# Prebuilt wheel to try per detected GPU arch, keyed by sm tag. These names do NOT
+# encode the torch ABI they were compiled against - that is exactly why the wheel
+# path was unreliable. Until a run tells us the working triple, we pick by arch and
+# let the probe below be the judge.
+declare -A SAGE_WHEEL_BY_ARCH=(
+    [sm_120]="https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+    [sm_89]="https://github.com/daromaj/vast_experiments/raw/master/python/sageattention-2.2.0-cp312-cp312-linux_x86_64_4090.whl"
+)
+
+# Viability probe: import + real GPU attention call + cosine check vs SDPA.
+# Exit 0 means the installed SageAttention is genuinely usable, which is the only
+# signal we trust before skipping the source build.
+SAGE_PROBE_URL="https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/scripts/sage_abi_probe.py"
+
+PROVISION_T0=$(date +%s)
+
+function phase() {
+    # Timestamped marker on a single timeline. Everything runs concurrently here,
+    # so absolute offsets are the only way to see what the critical path really is.
+    local now=$(date +%s)
+    local elapsed=$((now - PROVISION_T0))
+    printf '[PHASE] +%dm%02ds %s\n' $((elapsed / 60)) $((elapsed % 60)) "$*"
+}
+
 function provisioning_start() {
     # Setup logging
     LOG_FILE="${WORKSPACE}/provisioning.log"
@@ -109,8 +133,11 @@ function provisioning_start() {
     fi
 
     provisioning_print_header
+    phase "apt install start"
     provisioning_get_apt_packages
+    phase "apt done, pip base start"
     provisioning_get_pip_packages
+    phase "pip base done"
 
 
 
@@ -122,6 +149,7 @@ function provisioning_start() {
     # 1. Build SageAttention (CPU intensive, no pip lock)
     # 2. Setup Nodes (Network/Disk intensive, locks pip)
     echo "Starting parallel setup: SageAttention Build + Node Installation..."
+    phase "parallel setup launched (sage build + nodes), downloads starting"
     
     { provisioning_build_sageattention 2>&1 | sed 's/^/[SAGE_BUILD] /'; } &
     SAGE_PID=$!
@@ -144,20 +172,52 @@ function provisioning_start() {
     provisioning_get_files "${COMFYUI_DIR}/models/clip_vision" "${CLIP_VISION[@]}"
     provisioning_get_files "${COMFYUI_DIR}/models/wav2vec2" "${WAV2VEC_MODELS[@]}"
 
-    # Wait for both background processes
-    echo "Waiting for background setup (SageAttention Build + Nodes) to complete..."
-    wait $SAGE_PID
-    local sage_status=$?
-    
+    phase "downloads finished"
+
+    # Nodes are waited on FIRST, deliberately. Their requirements.txt files are what
+    # can move torch out from under us, and a wheel judged before torch settles is a
+    # wheel that breaks later — the likeliest explanation for "wheels are unreliable".
+    echo "Waiting for node installation to complete..."
     wait $NODES_PID
     local nodes_status=$?
-    
-    if [[ $sage_status -eq 0 && $nodes_status -eq 0 ]]; then
-        echo "Parallel setup complete. Installing SageAttention..."
-        # Quick install step now that build is done and pip is free
-        { provisioning_install_sageattention 2>&1 | sed 's/^/[SAGE_INSTALL] /'; }
+    phase "nodes install finished (status=${nodes_status})"
+
+    # Race the prebuilt wheel against the still-running source build. The build was
+    # going to happen anyway, so trying the wheel costs ~30s and, when it works,
+    # removes the ~6min build from the critical path. Worst case we lose those 30s.
+    local sage_ready=1
+    if provisioning_try_sage_wheel; then
+        sage_ready=0
+        phase "SAGE: wheel PASSED probe — cancelling source build"
+        kill "$SAGE_PID" 2>/dev/null
+        # The subshell dies instantly; its nvcc children do not. Reap them so they
+        # stop stealing CPU from the first generation.
+        pkill -f "setup.py build" 2>/dev/null
+        wait "$SAGE_PID" 2>/dev/null
     else
-        echo "WARNING: One or more setup tasks failed (Sage: $sage_status, Nodes: $nodes_status)"
+        phase "SAGE: wheel unusable — falling back to source build"
+        # Leave nothing half-installed for the source install to trip over.
+        pip uninstall -y sageattention 2>/dev/null
+        wait "$SAGE_PID"
+        local sage_status=$?
+        phase "SAGE: source build finished (status=${sage_status})"
+        if [[ $sage_status -eq 0 ]]; then
+            { provisioning_install_sageattention 2>&1 | sed 's/^/[SAGE_INSTALL] /'; }
+            sage_ready=0
+            provisioning_harvest_sage_wheel
+        else
+            echo "WARNING: SageAttention source build failed (status=${sage_status})"
+        fi
+    fi
+
+    if [[ $nodes_status -ne 0 ]]; then
+        echo "WARNING: Node installation reported failure (status=${nodes_status})"
+    fi
+
+    if [[ $sage_ready -eq 0 ]]; then
+        phase "SAGE: READY"
+    else
+        phase "SAGE: UNAVAILABLE — workflows using sageattn will fail"
     fi
 
     # Kill monitor loop
@@ -327,6 +387,75 @@ function provisioning_build_sageattention() {
     echo "SageAttention build complete. Duration: ${minutes}m ${seconds}s"
 }
 
+function provisioning_try_sage_wheel() {
+    # Install the arch-matched prebuilt wheel and prove it actually works before we
+    # let it replace a ~6 minute source build. Returns 0 only on a clean probe.
+    local start_time=$(date +%s)
+
+    local sm_tag
+    sm_tag=$(python3 -c "import torch;c=torch.cuda.get_device_capability(0);print('sm_%d%d'%c)" 2>/dev/null)
+    if [[ -z $sm_tag ]]; then
+        echo "[SAGE_WHEEL] Could not detect GPU arch — skipping wheel attempt."
+        return 1
+    fi
+
+    local wheel_url="${SAGE_WHEEL_BY_ARCH[$sm_tag]:-}"
+    if [[ -z $wheel_url ]]; then
+        echo "[SAGE_WHEEL] No wheel on file for ${sm_tag} — source build it is."
+        return 1
+    fi
+    echo "[SAGE_WHEEL] Detected ${sm_tag} -> $(basename "$wheel_url")"
+
+    local wheel_dir="${WORKSPACE}/wheels"
+    mkdir -p "$wheel_dir"
+    provisioning_download "$wheel_url" "$wheel_dir"
+
+    local wheel_file="${wheel_dir}/$(basename "$wheel_url")"
+    if [[ ! -f $wheel_file ]]; then
+        echo "[SAGE_WHEEL] Download produced no file — skipping wheel attempt."
+        return 1
+    fi
+
+    # --no-deps is load-bearing: the wheel must never drag in its own torch and
+    # invalidate the exact ABI we just waited for the nodes to settle.
+    if ! pip install --no-cache-dir --force-reinstall --no-deps "$wheel_file"; then
+        echo "[SAGE_WHEEL] pip install failed."
+        return 1
+    fi
+
+    provisioning_download "$SAGE_PROBE_URL" "$WORKSPACE"
+    local probe="${WORKSPACE}/sage_abi_probe.py"
+    if [[ ! -f $probe ]]; then
+        echo "[SAGE_WHEEL] Probe unavailable — refusing to trust an unverified wheel."
+        return 1
+    fi
+
+    python3 "$probe" 2>&1 | sed 's/^/[SAGE_PROBE] /'
+    local verdict=${PIPESTATUS[0]}
+
+    local duration=$(( $(date +%s) - start_time ))
+    echo "[SAGE_WHEEL] Attempt took ${duration}s, probe verdict=${verdict} (0=usable)"
+    return "$verdict"
+}
+
+function provisioning_harvest_sage_wheel() {
+    # A source build that works on this base image is worth keeping. Package it and
+    # print the path plus the ABI-keyed name to commit it under, so the next run can
+    # match a wheel by filename instead of guessing at it.
+    local sage_dir="${WORKSPACE}/SageAttention"
+    echo "[SAGE_HARVEST] Packaging the working build as a wheel..."
+    if ( cd "$sage_dir" && python setup.py bdist_wheel --skip-build ); then
+        echo "[SAGE_HARVEST] Wheel(s) written to ${sage_dir}/dist:"
+        ls -la "${sage_dir}/dist"/*.whl 2>/dev/null
+        # The probe prints the ABI triple and the exact filename to commit under.
+        local probe="${WORKSPACE}/sage_abi_probe.py"
+        [[ -f $probe ]] && python3 "$probe" 2>&1 | sed 's/^/[SAGE_HARVEST] /'
+        echo "[SAGE_HARVEST] scp this back and commit it under python/ before the instance dies."
+    else
+        echo "[SAGE_HARVEST] bdist_wheel failed (is the 'wheel' package installed?) — nothing to harvest."
+    fi
+}
+
 function provisioning_install_sageattention() {
     local start_time=$(date +%s)
     echo "Installing SageAttention..."
@@ -408,7 +537,18 @@ function provisioning_get_files() {
     echo "Downloading ${#arr[@]} file(s) to $dir..."
     for url in "${arr[@]}"; do
         echo "Downloading: $url"
+        # Millisecond resolution: the small files finish in well under a second, and
+        # integer seconds would report them as an absurd 0 MB/s.
+        local file_start=$(date +%s%3N)
         provisioning_download "$url" "$dir"
+        # Per-file timing + achieved throughput. Aggregate speed hides the one slow
+        # file that actually sets the download critical path.
+        local name=$(basename "${url%%\?*}")
+        local ms=$(( $(date +%s%3N) - file_start ))
+        [[ $ms -le 0 ]] && ms=1
+        local bytes=$(stat -c %s "${dir}/${name}" 2>/dev/null || echo 0)
+        local mbps=$(( bytes * 1000 / ms / 1024 / 1024 ))
+        echo "[DL_TIME] ${name} $((ms / 1000)).$((ms % 1000))s $((bytes / 1024 / 1024))MB ${mbps}MB/s"
         echo
     done
 }

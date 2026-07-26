@@ -57,6 +57,19 @@ INCLUDE_GPU_NAMES = [
 # GPU filter - exclude incompatible GPUs (applied after the allowlist, for one-off blocks)
 EXCLUDE_GPU_NAMES = []
 
+# Template to launch. "Comfy-infinitalk-cuda12.9-py312-sage" -> runs povision_fp8.sh.
+#
+# Verify before changing it (a wrong hash silently rents a box that provisions NOTHING):
+#     vastai search templates "hash_id=<hash>" --raw
+# and confirm the result has PROVISIONING_SCRIPT=.../povision_fp8.sh in `env`.
+#
+# This must stay an image tag that is PINNED (v0.27.0-cuda-12.9-py312), not one of the
+# floating `cuda-12.9-auto` tags. A floating tag moves torch between rentals, which
+# ABI-invalidates any cached SageAttention wheel at random - the reason the prebuilt
+# wheel path was written off as unreliable. Pinned tag == cacheable wheel.
+# py312 also matches the cp312 wheels in python/.
+TEMPLATE_HASH = "bc21be61dd09cf0e7fa463a758bf2768"
+
 
 def run_vastai_search(instance_type: str) -> List[Dict]:
     """
@@ -260,7 +273,7 @@ def create_instance(offer: Dict):
 
     cmd = ["vastai", "create", "instance", str(machine_id),
            "--disk", str(CONTAINER_SIZE_GB),
-           "--template_hash", "7f806603ccd0de9b7370266673c0a32d"]
+           "--template_hash", TEMPLATE_HASH]
 
     if instance_type == "bid":
         bid_price = dph + 0.01  # bid slightly above the shown price
