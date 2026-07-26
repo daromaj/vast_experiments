@@ -69,7 +69,7 @@ do_ssh() {
 }
 
 do_push() {
-    local id="$1" src="$2" dest="${3:-/workspace/}"
+    local id="$1" src="$2" dest="${3:-}"; dest="${dest:-/workspace/}"
     [[ -f $src ]] || die "no such file: $src"
     read -r user host port <<<"$(ssh_target "$id")"
     scp "${SSH_OPTS[@]}" -P "$port" "$src" "${user}@${host}:${dest}" ||
@@ -78,9 +78,9 @@ do_push() {
 }
 
 do_pull() {
-    local id="$1" src="$2" dest="${3:-.}"
+    local id="$1" src="$2" dest="${3:-}"; dest="${dest:-.}"
     read -r user host port <<<"$(ssh_target "$id")"
-    scp "${SSH_OPTS[@]}" -P "$port" "${user}@${host}:${src}" "$dest" ||
+    scp -r "${SSH_OPTS[@]}" -P "$port" "${user}@${host}:${src}" "$dest" ||
         die "scp failed (does $src exist on the instance?)"
     echo "pulled $src -> $dest"
 }
@@ -117,17 +117,22 @@ for i in d:
         ;;
 
     push)
-        [[ $# -ge 1 ]] || die "usage: vast.sh push <local-file> [id]"
+        [[ $# -ge 1 ]] || die "usage: vast.sh push <local-file> [remote-dest] [id]"
         src="$1"; shift
+        # An instance id is all digits; anything else is a destination path.
+        # Without this, "push file /workspace/x" fed the path to resolve_instance
+        # and scp died with an empty port ("bad port").
+        dest=""; [[ ${1:-} =~ ^[^0-9] || ${1:-} == */* ]] && { dest="$1"; shift; }
         id=$(resolve_instance "${1:-}") || exit 1
-        do_push "$id" "$src"
+        do_push "$id" "$src" "$dest"
         ;;
 
     pull)
-        [[ $# -ge 1 ]] || die "usage: vast.sh pull <remote-path> [id]"
+        [[ $# -ge 1 ]] || die "usage: vast.sh pull <remote-path> [local-dest] [id]"
         src="$1"; shift
+        dest=""; [[ ${1:-} =~ ^[^0-9] || ${1:-} == */* ]] && { dest="$1"; shift; }
         id=$(resolve_instance "${1:-}") || exit 1
-        do_pull "$id" "$src"
+        do_pull "$id" "$src" "$dest"
         ;;
 
     log)

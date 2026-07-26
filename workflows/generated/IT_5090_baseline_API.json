@@ -248,7 +248,7 @@
    "negative_prompt": "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards\nLeaning forward, rocking, shifting weight, shaking, large gestures, moving shoulders, standing up, morphing, zooming in",
    "quantization": "disabled",
    "use_disk_cache": false,
-   "device": "cpu"
+   "device": "gpu"
   },
   "class_type": "WanVideoTextEncodeCached",
   "_meta": {

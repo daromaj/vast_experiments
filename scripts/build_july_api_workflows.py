@@ -63,19 +63,27 @@ def set_inputs(wf, image, audio):
     wf[N_LOAD_AUDIO]["inputs"]["audio"] = audio
 
 
-def set_text_encode_device(wf, device):
+def set_text_encode(wf, device, quantization, disk_cache):
     """
-    umt5-xxl-enc-bf16 is 10.58GB. On 'gpu' it stays resident while
-    WanVideoModelLoader pulls in the 15.8GB diffusion model plus 2.5GB of
-    InfiniteTalk, which OOMs a 32GB 5090 (observed: 29.05GiB allocated of a
-    31.36GiB limit, every variant including the baseline).
+    The shipped workflow runs umt5-xxl-enc-bf16 (10.58GB) on 'gpu' with no disk
+    cache, and that configuration is known to work on a 32GB 5090.
 
-    'cpu' keeps the encoder out of VRAM entirely. It costs some one-time encode
-    time but applies equally to every variant, so speed comparisons between them
-    stay valid - unlike raising blocks_to_swap, which would change the very thing
-    being measured.
+    An OOM here is almost certainly NOT the encoder. InfiniteTalk samples in
+    81-frame windows but retains decoded pixel frames to seed each next window's
+    motion frames, so VRAM scales with TOTAL clip length. With blocks_to_swap=0
+    the 15.8GB diffusion model plus 2.5GB InfiniteTalk stay fully resident, which
+    leaves little headroom: a 58s clip (1455 frames) OOMs in WanVideoSampler
+    where an 8s clip fits comfortably. Shorten the clip or raise blocks_to_swap
+    rather than reaching for these knobs.
+
+    They exist anyway because they are genuinely useful: fp8_e4m3fn drops the
+    encoder to ~5.3GB, and disk_cache lets reruns skip encoding entirely. Both
+    apply identically to every variant, so speed comparisons stay valid.
     """
-    wf[N_TEXT_ENCODE]["inputs"]["device"] = device
+    n = wf[N_TEXT_ENCODE]["inputs"]
+    n["device"] = device
+    n["quantization"] = quantization
+    n["use_disk_cache"] = disk_cache
 
 
 def main():
@@ -83,8 +91,16 @@ def main():
     ap.add_argument("--image", default="santa-classic-portrait.png")
     ap.add_argument("--audio", default="santa_58s.mp3")
     ap.add_argument("--outdir", default="workflows/generated")
-    ap.add_argument("--text-encode-device", default="cpu", choices=["cpu", "gpu"],
-                    help="where umt5 runs; gpu OOMs a 32GB card alongside the diffusion model")
+    # Defaults reproduce the configuration that is known to have worked. The
+    # OOM chased earlier was caused by feeding a 58s clip, not by the encoder -
+    # see set_text_encode. Do not change these to "fix" an OOM; shorten the clip
+    # or raise blocks_to_swap instead.
+    ap.add_argument("--text-encode-device", default="gpu", choices=["cpu", "gpu"])
+    ap.add_argument("--text-encode-quantization", default="disabled",
+                    choices=["disabled", "fp8_e4m3fn"],
+                    help="disabled=bf16 10.58GB (as shipped); fp8_e4m3fn=~5.3GB")
+    ap.add_argument("--disk-cache", action="store_true",
+                    help="cache prompt embeddings to disk so reruns skip encoding")
     args = ap.parse_args()
 
     base = json.load(open(BASELINE))
@@ -100,7 +116,8 @@ def main():
 
     for name, wf in variants.items():
         set_inputs(wf, args.image, args.audio)
-        set_text_encode_device(wf, args.text_encode_device)
+        set_text_encode(wf, args.text_encode_device,
+                        args.text_encode_quantization, args.disk_cache)
         path = os.path.join(args.outdir, f"IT_5090_{name}_API.json")
         with open(path, "w") as fh:
             json.dump(wf, fh, indent=1)
@@ -111,7 +128,8 @@ def main():
             f"quant={m['quantization']:<16} merge_loras={wf[N_LORA]['inputs']['merge_loras']} "
             f"compile={wf[N_COMPILE]['inputs']['mode']:<26} "
             f"melband={'bypassed' if N_MELBAND_SAMPLER not in wf else 'active'} "
-            f"txtenc={wf[N_TEXT_ENCODE]['inputs']['device']} "
+            f"txtenc={wf[N_TEXT_ENCODE]['inputs']['device']}/"
+            f"{wf[N_TEXT_ENCODE]['inputs']['quantization']} "
             f"nodes={len(wf)}"
         )
         print(f"           -> {path}")
