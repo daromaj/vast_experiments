@@ -151,6 +151,85 @@ at that resolution. See `july_test.md`.
 Full method, per-setting attribution and the source audit behind the quick wins:
 `july_test.md` and `notes/node_optimization_audit.md`.
 
+### 2026-07-27 — RTX 4090 (measured)
+
+**58 s audio @ 480x832 on a 4090: 13 m 36 s** (816.3 s, peak 20,626 MiB), against
+**9 m 50 s** on a 5090. The 4090 is **1.38x slower** on the same clip.
+
+The 4090 needs block swapping and the 5090 does not. Its 24,564 MiB nameplate is
+not the budget — torch reports a **device limit of 23.52 GiB**, with ~480 MB going
+to driver and context. The pipeline peaks at ~24.4 GiB on a 5090, so the 4090 is
+~0.9 GiB short of running resident.
+
+The interesting result is that **more block swapping is faster, not slower**:
+
+| swap | warm (8 s clip) | peak reserved | |
+|---|---|---|---|
+| 2 | — | 24,068 MiB (pinned) | **OOM** |
+| 4 | 254.9 s | 24,080 MiB (pinned) | |
+| 6 | 255.8 s | 24,076 MiB (pinned) | |
+| 12 | 108.9 s | 21,782 MiB | |
+| **16** | **105.2 s** | 20,562 MiB | **fastest** |
+| 20 | 106.9 s | 20,562 MiB | shipped default |
+| 28 | 114.5 s | 20,562 MiB | transfers now dominate |
+
+swap=4 and swap=6 both sit pinned at 24,07x MiB, which *is* the 23.52 GiB device
+limit, and both run ~2.4x slower than swap=16. Pinned against the ceiling the
+caching allocator thrashes — synchronous frees and `cudaMalloc` retries — and that
+costs far more than moving another dozen blocks across PCIe. The curve is
+U-shaped with a flat floor from 12 to 20 and only turns back up at 28.
+
+**The minimum config that fits is the worst one to run.** Sizing block swap by
+"how much must I shed to avoid OOM" produces exactly the 4-6 range, which is the
+slowest working configuration on the card.
+
+`blocks_to_swap=20` in `workflows/IT_4090_july2026_*.json` is therefore **correct
+and unchanged** — it is 1.6% off the measured optimum of 16, which is noise, and
+both report identical peak VRAM. It was a lucky default (it is the node's own),
+but it is the right one.
+
+Note the peak column is *reserved*, not required: PyTorch's caching allocator
+keeps what it takes, so it distinguishes "had headroom" from "had none" and
+nothing finer.
+
+This also inverts the pre-fix 4090 figures further down (`swap 5 = 238 s` beating
+`swap 20 = 314 s`). That ordering was an artifact of the broken SageAttention
+wheel; with a correctly built one it reverses.
+
+**Cost per 58 s video**, at the cheapest hosts meeting the search criteria:
+
+| | RTX 5090 | RTX 4090 |
+|---|---|---|
+| cheapest $/hr seen | $0.456 | $0.362 |
+| 58 s render | 589.9 s | 816.3 s |
+| **$/video** | **~$0.075** | **~$0.082** |
+
+The 4090's ~21% lower hourly rate does not cover its ~38% longer render, so the
+5090 is both cheaper per video and faster in wall-clock. It also has headroom for
+720p and never enters the thrash regime. **Prefer the 5090**; the 4090 is a
+fallback on availability.
+
+### Provisioning time (create to first queued job)
+
+| Stage | 4090 | 5090 |
+|---|---|---|
+| container pull + boot | 1 m 26 s | not captured |
+| apt + pip base | 0 m 41 s | 0 m 48 s |
+| model downloads + node install | 1 m 49 s | 2 m 23 s |
+| SageAttention | **2 m 04 s (source build)** | 0 m 10 s (cached wheel) |
+| WANOPT node patch | 0 m 07 s | n/a |
+| **script total** | **4 m 54 s** | 3 m 21 s |
+| **create to queueable** | **~6 m 30 s** | ~4 m 45 s |
+
+The whole gap is the sage build. The 5090 skipped it because a wheel was cached
+for its ABI; a matching `sm_89` wheel is now committed under
+`python/sage/torch2.10.0-cu128-sm_89/`, which should bring the 4090 to ~4 m 20 s.
+
+Queueable is not the same as having a video. The first generation pays the
+torch.compile warmup — run 1 versus run 2 above is 230.4 s versus 105.2 s on an
+8 s clip. For a **one-shot rental** (provision, render once, destroy) that warmup
+is pure overhead, and `max-autotune` only starts paying from the second render.
+
 ### Disk sizing
 
 Measured on a live 5090 rental after a full provision + several renders:

@@ -180,12 +180,35 @@ what run 2 is meant to measure.
 | blocks_to_swap | 0 | 20 |
 | prefetch_blocks | 0 | 1 |
 
-`blocks_to_swap=20` (of the 14B model's 40 blocks) is the node default and a **safe starting point** — not a tuned value. `prefetch_blocks=1` overlaps the CPU→GPU block transfer with compute to claw back most of the swap penalty.
+`prefetch_blocks=1` overlaps the CPU→GPU block transfer with compute to claw back most of the swap penalty.
 
-**Tune it on the host:**
-- Watch `nvidia-smi` peak VRAM during a run. If it OOMs, raise `blocks_to_swap` (try 24–28).
-- If there's several GB of headroom to spare, **lower** it (try 12–16) — fewer swapped blocks = faster. Every block you keep resident is time saved.
-- Expect the 4090 to be slower than the 5090 regardless: 24 GB can't hold the whole model, so some swap traffic is unavoidable. These variants make it *run* and be as fast as 24 GB allows, not match the 5090.
+### Results — 2026-07-27, RTX 4090 (24,564 MiB), vast.ai 45944385
+
+`blocks_to_swap=20` was the node default and an untuned guess. It is now **measured and kept**. 8 s clip, run 2 of 2, sage + 4-step + quick wins, untiled:
+
+| swap | warm | peak reserved | |
+|---|---|---|---|
+| 2 | — | 24,068 MiB (pinned) | **OOM** |
+| 4 | 254.9 s | 24,080 MiB (pinned) | |
+| 6 | 255.8 s | 24,076 MiB (pinned) | |
+| 12 | 108.9 s | 21,782 MiB | |
+| **16** | **105.2 s** | 20,562 MiB | fastest |
+| 20 | 106.9 s | 20,562 MiB | **shipped** |
+| 28 | 114.5 s | 20,562 MiB | |
+
+Full 58 s clip at swap=16: **816.3 s (13 m 36 s)**, peak 20,626 MiB, versus 9 m 50 s on the 5090 — **1.38x slower**.
+
+**The advice this section used to give was backwards.** It said to lower `blocks_to_swap` when there is headroom, because "every block you keep resident is time saved". The opposite is true near the ceiling:
+
+- torch reports a **device limit of 23.52 GiB**, not the 23.99 GiB the nameplate implies — ~480 MB goes to driver and context. Comparing *total* VRAM is what made the 4090 look ~376 MB short; against *usable* memory the gap is ~0.9 GiB.
+- swap=4 and swap=6 both sit pinned at that limit and run **2.4x slower** than swap=16. Pinned against the ceiling the caching allocator thrashes on synchronous frees and `cudaMalloc` retries, which costs far more than the PCIe traffic of a dozen extra blocks.
+- The curve is U-shaped with a flat floor from 12 to 20, turning up only at 28 where transfer cost finally dominates.
+
+So the tuning rule is **not** "shed the minimum that avoids OOM" — that lands squarely in the 4-6 thrash zone, the slowest working setting on the card. Target real headroom instead: ~20,500 MiB reserved against a 23.52 GiB limit. 16 and 20 are within noise of each other and report identical peaks, so the shipped 20 stays.
+
+This also explains the pre-fix figures in `README.md` (`swap 5 = 238 s` beating `swap 20 = 314 s`), which are the reverse ordering. Those were measured with the mis-built SageAttention wheel; correcting the wheel flips the result.
+
+Caveat on the peak column: it is *reserved*, read from `nvidia-smi`, not required. The caching allocator does not hand memory back, so a pinned variant reports the device limit whatever its true working set. It separates "had headroom" from "had none" and nothing finer — `torch.cuda.max_memory_allocated` inside the node would be needed for anything sharper.
 
 ## Reminder on the ceiling
 
