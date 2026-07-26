@@ -548,7 +548,9 @@ function provisioning_get_files() {
         [[ $ms -le 0 ]] && ms=1
         local bytes=$(stat -c %s "${dir}/${name}" 2>/dev/null || echo 0)
         local mbps=$(( bytes * 1000 / ms / 1024 / 1024 ))
-        echo "[DL_TIME] ${name} $((ms / 1000)).$((ms % 1000))s $((bytes / 1024 / 1024))MB ${mbps}MB/s"
+        # %03d on the fractional part: without padding, 45007ms prints as "45.7s".
+        printf '[DL_TIME] %s %d.%03ds %dMB %dMB/s\n' \
+            "$name" $((ms / 1000)) $((ms % 1000)) $((bytes / 1024 / 1024)) "$mbps"
         echo
     done
 }
