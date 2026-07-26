@@ -70,7 +70,15 @@ EXCLUDE_GPU_NAMES = []
 # wheel at random - the likeliest reason the prebuilt wheel path got written off
 # as unreliable. Pinned tag == cacheable wheel. py312 matches the cp312 wheels
 # in python/.
-IMAGE = "vastai/comfy:v0.27.0-cuda-12.9-py312"
+#
+# Bumping this tag invalidates any harvested SageAttention wheel: the wheel is
+# keyed to the torch ABI this specific image ships. Harvest a fresh one after any
+# bump (povision_fp8.sh prints the ABI-keyed filename on a source build).
+#
+# Check for newer tags with:
+#     curl -s "https://hub.docker.com/v2/repositories/vastai/comfy/tags\
+#?page_size=100&name=cuda-12.9-py312"
+IMAGE = "vastai/comfy:v0.28.0-cuda-12.9-py312"
 
 PROVISIONING_SCRIPT = (
     "https://raw.githubusercontent.com/daromaj/vast_experiments/"
