@@ -95,9 +95,11 @@ try: d=json.load(sys.stdin)
 except Exception: d=[]
 if not d: print("no instances"); raise SystemExit
 for i in d:
+    # `or` not a .get default: a freshly created instance has these keys
+    # present but null, so the default never fires.
     row = "{}  {:<10} {:<16} ${:.3f}/hr  {}".format(
-        i["id"], i.get("actual_status","?"), i.get("gpu_name","?"),
-        i.get("dph_total",0) or 0, i.get("status_msg","") or "")
+        i["id"], i.get("actual_status") or "?", i.get("gpu_name") or "?",
+        i.get("dph_total") or 0, i.get("status_msg") or "")
     print(row[:110])
 '
         ;;
