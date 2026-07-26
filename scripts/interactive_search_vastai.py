@@ -14,6 +14,7 @@ Prerequisite: activate the project virtual environment first, e.g.::
     source .venv/bin/activate
 """
 import curses
+import shlex
 import subprocess
 import json
 import sys
@@ -57,18 +58,67 @@ INCLUDE_GPU_NAMES = [
 # GPU filter - exclude incompatible GPUs (applied after the allowlist, for one-off blocks)
 EXCLUDE_GPU_NAMES = []
 
-# Template to launch. "Comfy-infinitalk-cuda12.9-py312-sage" -> runs povision_fp8.sh.
+# --- Instance configuration -------------------------------------------------
 #
-# Verify before changing it (a wrong hash silently rents a box that provisions NOTHING):
-#     vastai search templates "hash_id=<hash>" --raw
-# and confirm the result has PROVISIONING_SCRIPT=.../povision_fp8.sh in `env`.
+# Deliberately NOT a saved template. Everything below is passed explicitly on the
+# create command so the full instance config lives in git and is reviewable in a
+# diff, instead of sitting in Vast's web UI where it drifts out from under us.
+# A saved template hash would silently override nothing and hide everything.
 #
-# This must stay an image tag that is PINNED (v0.27.0-cuda-12.9-py312), not one of the
-# floating `cuda-12.9-auto` tags. A floating tag moves torch between rentals, which
-# ABI-invalidates any cached SageAttention wheel at random - the reason the prebuilt
-# wheel path was written off as unreliable. Pinned tag == cacheable wheel.
-# py312 also matches the cp312 wheels in python/.
-TEMPLATE_HASH = "bc21be61dd09cf0e7fa463a758bf2768"
+# Image tag is PINNED, not one of the floating `cuda-12.9-auto` tags. A floating
+# tag moves torch between rentals, which ABI-invalidates any cached SageAttention
+# wheel at random - the likeliest reason the prebuilt wheel path got written off
+# as unreliable. Pinned tag == cacheable wheel. py312 matches the cp312 wheels
+# in python/.
+IMAGE = "vastai/comfy:v0.27.0-cuda-12.9-py312"
+
+PROVISIONING_SCRIPT = (
+    "https://raw.githubusercontent.com/daromaj/vast_experiments/"
+    "refs/heads/master/povision_fp8.sh"
+)
+
+# --use-sage-attention makes ComfyUI hard-depend on SageAttention being importable.
+# If provisioning ends with "SAGE: UNAVAILABLE" in the log, expect ComfyUI to fail
+# here rather than quietly falling back.
+COMFYUI_ARGS = (
+    "--disable-auto-launch --port 18188 --enable-cors-header "
+    "--disable-xformers --use-sage-attention"
+)
+
+PORTS = [1111, 8080, 8384, 72299, 8188, 8288]
+
+PORTAL_CONFIG = (
+    "localhost:1111:11111:/:Instance Portal|"
+    "localhost:8188:18188:/:ComfyUI|"
+    "localhost:8288:18288:/docs:API Wrapper|"
+    "localhost:8188:18188:/:ComfyUI|"
+    "localhost:8080:18080:/:Jupyter|"
+    "localhost:8080:8080:/terminals/1:Jupyter Terminal|"
+    "localhost:8384:18384:/:Syncthing"
+)
+
+
+def build_env_string() -> str:
+    """
+    Assemble the -p/-e blob that `vastai create instance --env` expects.
+
+    It is one opaque string to the CLI, so it is built from parts here rather than
+    kept as a single unreadable literal - a typo inside it does not fail loudly,
+    it just produces an instance that is subtly wrong.
+    """
+    parts = [f"-p {p}:{p}" for p in PORTS]
+    parts += [
+        '-e COMFYUI_VERSION=latest',
+        f'-e COMFYUI_ARGS="{COMFYUI_ARGS}"',
+        '-e COMFYUI_API_BASE=http://localhost:18188',
+        f'-e PROVISIONING_SCRIPT={PROVISIONING_SCRIPT}',
+        f'-e PORTAL_CONFIG="{PORTAL_CONFIG}"',
+        '-e OPEN_BUTTON_PORT=1111',
+        '-e JUPYTER_DIR=/',
+        '-e DATA_DIRECTORY=/workspace/',
+        '-e OPEN_BUTTON_TOKEN=1',
+    ]
+    return " ".join(parts)
 
 
 def run_vastai_search(instance_type: str) -> List[Dict]:
@@ -272,8 +322,11 @@ def create_instance(offer: Dict):
     dph = offer.get('dph_total', offer.get('dph', 0)) or 0
 
     cmd = ["vastai", "create", "instance", str(machine_id),
+           "--image", IMAGE,
+           "--env", build_env_string(),
+           "--onstart-cmd", "entrypoint.sh",
            "--disk", str(CONTAINER_SIZE_GB),
-           "--template_hash", TEMPLATE_HASH]
+           "--jupyter", "--ssh", "--direct"]
 
     if instance_type == "bid":
         bid_price = dph + 0.01  # bid slightly above the shown price
@@ -281,6 +334,11 @@ def create_instance(offer: Dict):
         print(f"\n🖥️ Creating BID (interruptible) instance {machine_id} at bid ${bid_price:.3f}/hr...")
     else:
         print(f"\n🖥️ Creating ON-DEMAND instance {machine_id} at ${dph:.3f}/hr...")
+
+    # Echo the exact command. --env is a single opaque blob that the CLI will not
+    # validate, so a mistake in it produces a running, billing, subtly-wrong box.
+    # Seeing it before it executes is the only cheap check available.
+    print("\n" + shlex.join(cmd) + "\n")
 
     try:
         subprocess.run(cmd, check=True, text=True)
