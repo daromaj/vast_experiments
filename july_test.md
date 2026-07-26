@@ -54,37 +54,54 @@ Same procedure. Only worth running if 4step shows quality problems, or to see th
 
 ## Results — 2026-07-26, RTX 5090 (31.36 GiB), vast.ai 45930851
 
-**Read this first: `attention_mode` must be `sdpa`, not `sageattn`.**
+**Read this first: the OOM was a SageAttention wheel built for the wrong GPU.**
 
-Every workflow here OOMed in `WanVideoSampler` until that one node-122 input was
-changed. SageAttention was using **≥6 GB more VRAM than plain SDPA** — backwards
-for a fused kernel — because the prebuilt wheel we ship contains only
-`_qattn_sm80` / `_qattn_sm89` and has **no sm_120 kernel**, so it silently falls
-back on a 5090. It is dated 2025-12-13 (Ada/Ampere era) yet was filed under
-`python/sage/torch2.10.0-cu128-sm_120/`, and `sage_abi_probe.py` passed it
-because the fallback still computes *correct* output (cosine 0.9993 vs SDPA).
-The probe now also requires an arch-matching kernel. `sdpa` is the node's own
-default (`nodes_model_loading.py:1022`); these workflows had overridden it.
+Every workflow here OOMed in `WanVideoSampler` at ~29.3 GiB, and switching node
+122 to `sdpa` was what made them complete — which made `sageattn` look like the
+culprit. It wasn't. The wheel cached at
+`python/sage/torch2.10.0-cu128-sm_120/` was dated 2025-12-13 and had been built
+for Ada/Ampere, so on a 5090 SageAttention **silently fell back** and used ≥6 GB
+more VRAM than SDPA. `sage_abi_probe.py` passed it because a fallback still
+returns *correct* output (cosine 0.9993 vs SDPA).
+
+Rebuilt from source on the 5090 itself with `TORCH_CUDA_ARCH_LIST=12.0` (nvcc:
+`396 entry functions for 'sm_120a'`), sage is not just fine — it is the single
+biggest speed lever available. That wheel is now what's committed.
+
+Do not try to identify a sage build by filename: 2.2.0 always produces
+`_qattn_sm80` / `_qattn_sm89` extensions no matter what it was compiled for,
+because those are the kernel *sources*, not the targets. The probe now checks
+behaviourally, comparing peak VRAM against SDPA.
 
 Measured with `scripts/run_july_tests.py` (2 runs each; run 1 discarded as
-compile warmup). Input: 8 s clip @ 480×832, `blocks_to_swap=0`, all on `sdpa`.
+compile warmup). Input: 8 s clip @ 480×832, `blocks_to_swap=0`.
 
-| Config | Steps | Scheduler | Tiled VAE | Compile | Warmup | **Gen time** | vs baseline |
-|---|---|---|---|---|---|---|---|
-| **s1_4step_untiled** | 4 | flowmatch_distill | no | max-autotune | 150.3 s | **117.8 s** | **1.80× faster** |
-| s0_4step_tiled | 4 | flowmatch_distill | yes | max-autotune | 171.7 s | 141.2 s | 1.50× |
-| s3_4step_nocomp | 4 | flowmatch_distill | yes | default | 174.2 s | 141.4 s | 1.50× |
-| s2_5step_tiled | 5 | dpm++_sde | yes | max-autotune | 195.2 s | 162.7 s | 1.30× |
-| s4_baseline_sdpa | 6 | dpm++_sde | yes | default | 231.7 s | 211.5 s | — |
+| Config | Attention | Steps | Scheduler | Tiled VAE | Compile | Warmup | **Gen time** | vs baseline |
+|---|---|---|---|---|---|---|---|---|
+| **s5_sage_untiled** | sageattn | 4 | flowmatch_distill | no | max-autotune | 120.1 s | **87.7 s** | **2.41× faster** |
+| s1_4step_untiled | sdpa | 4 | flowmatch_distill | no | max-autotune | 150.3 s | 117.8 s | 1.80× |
+| s0_4step_tiled | sdpa | 4 | flowmatch_distill | yes | max-autotune | 171.7 s | 141.2 s | 1.50× |
+| s3_4step_nocomp | sdpa | 4 | flowmatch_distill | yes | default | 174.2 s | 141.4 s | 1.50× |
+| s2_5step_tiled | sdpa | 5 | dpm++_sde | yes | max-autotune | 195.2 s | 162.7 s | 1.30× |
+| s4_baseline_sdpa | sdpa | 6 | dpm++_sde | yes | default | 231.7 s | 211.5 s | — |
 
 Conclusions:
 
+- **SageAttention is worth 30 s** (117.8 → 87.7) at otherwise identical
+  settings — provided the wheel matches the host arch. `scripts/attention_bench.py`
+  measures the kernel in isolation at the real WanVideo shape (40 heads ×
+  32,760 tokens × 128 dim): **sage 39.1 ms vs sdpa 106.9 ms**.
 - **`tiled_vae` costs ~23 s** (141.2 → 117.8). It was only ever an OOM
-  workaround; with `sdpa` there is headroom without it. Turn it off.
-- **`max-autotune-no-cudagraphs` buys nothing**: 141.2 s vs 141.4 s for plain
-  `default`, while adding ~33 s to the first run. It is a net loss unless you
-  generate many clips in one session without restarting ComfyUI.
+  workaround; there is headroom without it. Turn it off.
+- **`max-autotune-no-cudagraphs` buys nothing** on sdpa: 141.2 s vs 141.4 s for
+  plain `default`, while adding ~33 s to the first run. Net loss unless you
+  generate many clips per ComfyUI session.
 - 4 steps + `flowmatch_distill` beats 5 steps by 45 s, as designed.
+
+The four shipped `IT_{4090,5090}_july2026_{4,5}step.json` workflows already
+carry this configuration (sageattn, `tiled_vae=false`, 81-frame window,
+`max-autotune-no-cudagraphs`); nothing in them needed changing once the wheel
+was fixed.
 
 Quality has NOT been assessed yet — these are speed numbers only. Compare the
 pulled videos before adopting 4-step as the default.
@@ -99,9 +116,11 @@ file of each pair is the measured run:
 | `InfiniteTalk_00007/00008` | s2_5step_tiled |
 | `InfiniteTalk_00009/00010` | s3_4step_nocomp |
 | `InfiniteTalk_00011/00012` | s4_baseline_sdpa (6-step reference) |
+| `InfiniteTalk_00013/00014` | **s5_sage_untiled** (fastest) |
 
-Compare `00006` (4-step) against `00012` (6-step baseline) — that is the
-quality question that decides whether the 1.80× is free.
+Compare `00014` (4-step sage) against `00012` (6-step baseline) — that is the
+quality question that decides whether the 2.41× is free. `00006` (4-step sdpa)
+isolates the attention backend from the step count.
 
 ### Measurement trap worth keeping
 

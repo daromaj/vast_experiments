@@ -18,3 +18,6 @@ InfiniteTalk/
 SageAttention/
 lightx2v/LightX2V/
 provisioning-*.log
+
+# Vendored node source, cloned for reference only (see vendor/README)
+vendor/

@@ -129,23 +129,32 @@ SAGEATTENTION_WHEELS=(
 # Verified working: torch2.10.0-cu128-sm_120 on vastai/comfy:v0.28.0-cuda-12.9-py312
 # (probe passed, cosine 0.9993 vs SDPA, RTX 5090).
 #
-# IMPORTANT (measured 2026-07-26, RTX 5090 / 31.36GiB): a passing probe does NOT
-# mean the workflows can use SageAttention. The kernel is correct in isolation
-# but blows the VRAM budget at real WanVideo shapes. Same workflow, same clip,
-# only node 122 attention_mode differing:
+# CRITICAL (measured 2026-07-26, RTX 5090 / 31.36GiB): a passing probe does NOT
+# mean the wheel was built for THIS GPU. SageAttention falls back silently on an
+# arch it has no kernel for - it still returns correct output (probe cosine
+# 0.9993 vs SDPA), it just uses far more VRAM. The wheel previously cached here
+# was dated 2025-12-13 and had been built for Ada/Ampere, so on every 5090 rental:
 #
 #   attention_mode=sageattn -> OOM in WanVideoSampler at 29.3GiB allocated
-#   attention_mode=sdpa     -> completes, 23.4GiB peak, 187.6s
+#   attention_mode=sdpa     -> completes, 23.4GiB peak
 #
-# So sage costs >=6GB MORE than sdpa here, which is backwards for a fused kernel
-# and points at a fallback to materialised attention at ~32.8k tokens (an 81-frame
-# 480x832 window) rather than a bad build. The workflows had overridden the node's
-# own default, which is sdpa (nodes_model_loading.py:1022).
+# After rebuilding from source with TORCH_CUDA_ARCH_LIST=12.0 on the 5090 itself
+# (nvcc reports "396 entry functions for 'sm_120a'"), same workflow, same 8s clip:
 #
-# Consequence for provisioning: if sdpa stays competitive on speed, this whole
-# build/wheel path is dead weight and can be dropped to save the SageAttention
-# stage entirely. Do not remove it until the speed comparison is recorded in
-# july_test.md - it is only worth keeping if sage is faster where it fits.
+#   sageattn 87.7s   |   sdpa 117.8s      -> sage is 1.34x faster, and 2.41x
+#                                            faster than the 6-step baseline
+#   isolated kernel bench at the real shape (40h x 32760tok x 128d):
+#   sageattn 39.1ms  |   sdpa 106.9ms
+#
+# So SageAttention IS worth the build - it is the single biggest speed lever
+# here - but ONLY when built for the host arch. Do not trust a wheel by filename:
+# the extensions are always named _qattn_sm80 / _qattn_sm89 regardless of target
+# (2.2.0 compiles those kernel SOURCES for whatever TORCH_CUDA_ARCH_LIST says),
+# so the .so names tell you nothing. sage_abi_probe.py now checks behaviourally,
+# comparing peak VRAM against SDPA, and rejects a wheel that regresses.
+#
+# When harvesting a wheel into python/sage/, only publish one built on the same
+# GPU family as the directory's sm_ tag claims.
 SAGE_WHEEL_BASE="https://github.com/daromaj/vast_experiments/raw/master/python/sage"
 SAGE_WHEEL_FILE="sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
 

@@ -75,6 +75,16 @@ CANDIDATES = [
     ("s2_5step_tiled",   "fp8_e4m3fn_fast", 0, 81, 5, "dpm++_sde",         "max-autotune-no-cudagraphs", False, True,  "sdpa"),
     ("s3_4step_nocomp",  "fp8_e4m3fn_fast", 0, 81, 4, "flowmatch_distill", "default",                    False, True,  "sdpa"),
     ("s4_baseline_sdpa", "disabled",        0, 81, 6, "dpm++_sde",         "default",                    False, True,  "sdpa"),
+    # The sdpa-only conclusion above was half right: sage was OOMing because the
+    # WHEEL was built for the wrong arch, not because sage is memory-hungry. On a
+    # wheel compiled with TORCH_CUDA_ARCH_LIST=12.0 (sm_120a) s5 runs in 87.7s vs
+    # s1's 117.8s at identical settings, so sage is the backend after all. These
+    # last two probe what else is left now that VRAM stopped being the binding
+    # constraint: whether max-autotune still earns its warmup, and whether a
+    # longer window (fewer windows = less motion_frame recompute) beats 81.
+    ("s5_sage_untiled",  "fp8_e4m3fn_fast", 0, 81,  4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, False, "sageattn"),
+    ("s6_sage_nocomp",   "fp8_e4m3fn_fast", 0, 81,  4, "flowmatch_distill", "default",                    False, False, "sageattn"),
+    ("s7_sage_win121",   "fp8_e4m3fn_fast", 0, 121, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, False, "sageattn"),
 ]
 
 

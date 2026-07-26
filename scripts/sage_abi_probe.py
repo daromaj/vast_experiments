@@ -76,44 +76,71 @@ def collect_environment():
     return env
 
 
-def check_arch_kernel(module_name, sm_tag):
+def check_memory_vs_sdpa(mod, entrypoint, sm_tag):
     """
-    Failure mode 4: the wheel imports, runs, and returns CORRECT results - but
-    has no kernel compiled for this GPU and is silently falling back.
+    Failure mode 4: the wheel imports, runs, and returns CORRECT results - but is
+    pathologically memory-hungry on this GPU, which only shows up as an OOM deep
+    inside a real workflow.
 
-    This is the one that cost the most time. A wheel shipping only
-    _qattn_sm80/_qattn_sm89 was filed under an sm_120 path and served to every
-    RTX 5090 rental. It passed every check above (cosine 0.9993 vs SDPA), so the
-    build looked healthy, while in the actual workflow SageAttention used >=6GB
-    MORE VRAM than plain SDPA and OOMed WanVideoSampler at 29.3GiB where sdpa
-    completed at 23.4GiB. Correct output, wrong kernel.
+    Do NOT try to detect this by looking for an arch-named extension. An earlier
+    version of this probe required a _qattn_sm120*.so and reported MISSING for a
+    wheel built from source on the very GPU in question: SageAttention 2.2.0 has
+    no per-arch module, it compiles the sm80/sm89 kernel SOURCES for whatever
+    TORCH_CUDA_ARCH_LIST is set to. The filenames say nothing about the target.
 
-    SageAttention names its extensions _qattn_sm<arch>.*.so, so require one
-    matching this device. sm_120 also accepts sm_120a (the arch-conditional
-    variant nvcc emits for Blackwell).
+    Measure behaviour instead. At WanVideo's real attention shape a healthy sage
+    build is FASTER than SDPA and within ~1.5x its peak memory (measured on a
+    5090: sdpa 106.9ms/1.57GiB vs sageattn 39.1ms/2.34GiB). A build that falls
+    back materialises far more than that.
     """
-    result = {"sm_tag": sm_tag, "arch_kernel_present": False}
-    try:
-        mod = __import__(module_name)
-        pkg_dir = os.path.dirname(mod.__file__)
-    except Exception as e:  # noqa: BLE001
-        result["error"] = repr(e)
+    import torch
+    import torch.nn.functional as F
+
+    result = {"sm_tag": sm_tag}
+    fn = getattr(mod, entrypoint, None)
+    if fn is None:
+        result["error"] = f"{entrypoint} not found"
         return result
 
-    sos = [f for f in os.listdir(pkg_dir) if f.endswith(".so")]
-    result["extensions"] = sorted(sos)
+    # Big enough to expose a fallback, small enough to be safe beside other work.
+    heads, seq, dim = 16, 8192, 128
+    q, k, v = (
+        torch.randn(1, heads, seq, dim, device="cuda", dtype=torch.float16)
+        for _ in range(3)
+    )
 
-    arch = (sm_tag or "").replace("sm_", "")
-    matches = [f for f in sos if f.startswith(f"_qattn_sm{arch}")]
-    result["arch_kernel_present"] = bool(matches)
-    result["matching"] = matches
-    if not matches:
-        # Name the trap explicitly - a passing cosine check does NOT rule it out.
-        result["warning"] = (
-            f"No _qattn_sm{arch} extension. SageAttention will fall back for "
-            f"this GPU: expect much higher VRAM than SDPA and possible OOM, "
-            f"even though numerical output stays correct."
-        )
+    def peak_of(call):
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        try:
+            call()
+            torch.cuda.synchronize()
+            return torch.cuda.max_memory_allocated() / 2**30, None
+        except Exception as e:  # noqa: BLE001
+            return None, repr(e)
+
+    sdpa_peak, sdpa_err = peak_of(lambda: F.scaled_dot_product_attention(q, k, v))
+    try:
+        sage_peak, sage_err = peak_of(lambda: fn(q, k, v, tensor_layout="HND"))
+    except TypeError:
+        sage_peak, sage_err = peak_of(lambda: fn(q, k, v))
+
+    result.update({"sdpa_peak_gib": sdpa_peak, "sage_peak_gib": sage_peak,
+                   "sdpa_error": sdpa_err, "sage_error": sage_err})
+
+    if sdpa_peak and sage_peak:
+        ratio = sage_peak / sdpa_peak
+        result["peak_ratio"] = ratio
+        # 1.5x is normal for sage's quantisation buffers; 3x means it fell back.
+        result["memory_sane"] = ratio <= 3.0
+        if not result["memory_sane"]:
+            result["warning"] = (
+                f"SageAttention peaks at {ratio:.1f}x SDPA on this GPU - it is "
+                f"falling back rather than using a native kernel. Expect OOM in "
+                f"real workflows even though output is numerically correct."
+            )
+    else:
+        result["memory_sane"] = True  # could not measure; do not fail the wheel
     return result
 
 
@@ -223,10 +250,11 @@ def main():
     for module_name, entrypoint in (("sageattention", "sageattn"), ("sageattn3", "sageattn3")):
         import_result, mod = check_import(module_name)
         entry = {"import": import_result}
-        if module_name == "sageattention" and import_result.get("imported"):
-            entry["arch"] = check_arch_kernel(
-                module_name, report["environment"].get("sm_tag", ""))
-            arch_ok = entry["arch"].get("arch_kernel_present", False)
+        if module_name == "sageattention" and mod is not None and report[
+                "environment"].get("cuda_available"):
+            entry["memory"] = check_memory_vs_sdpa(
+                mod, "sageattn", report["environment"].get("sm_tag", ""))
+            arch_ok = entry["memory"].get("memory_sane", True)
         if mod is not None and report["environment"].get("cuda_available"):
             # Prefer the documented entrypoint; fall back to whatever the module exposes.
             candidates = [entrypoint] + [
@@ -245,7 +273,7 @@ def main():
     # missing arch kernel as a reason to build from source.
     if ok and not arch_ok:
         report["verdict"] = "FALL_BACK_TO_SOURCE_BUILD"
-        report["reason"] = "correct output but no kernel for this GPU arch"
+        report["reason"] = "correct output but pathological VRAM vs SDPA"
         ok = False
     else:
         report["verdict"] = "WHEEL_USABLE" if ok else "FALL_BACK_TO_SOURCE_BUILD"
@@ -259,11 +287,11 @@ def main():
         print(f"VERDICT: {report['verdict']}")
         if report.get("reason"):
             print(f"REASON:  {report['reason']}")
-        arch = (report["modules"].get("sageattention") or {}).get("arch") or {}
-        if arch:
-            print(f"Arch kernel for {arch.get('sm_tag')}: "
-                  f"{'present' if arch.get('arch_kernel_present') else 'MISSING'} "
-                  f"({', '.join(arch.get('extensions', [])) or 'none'})")
+        memck = (report["modules"].get("sageattention") or {}).get("memory") or {}
+        if memck.get("peak_ratio"):
+            print(f"Peak VRAM vs SDPA: {memck['peak_ratio']:.2f}x "
+                  f"(sage {memck['sage_peak_gib']:.2f} GiB / "
+                  f"sdpa {memck['sdpa_peak_gib']:.2f} GiB)")
         print(
             "ABI triple: torch={t} cuda={c} {cp} {sm}".format(
                 t=env.get("torch", "?"),
