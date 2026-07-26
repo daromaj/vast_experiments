@@ -24,7 +24,11 @@ from typing import List, Dict, Optional
 
 # Search criteria
 MIN_GPU_RAM = 24  # GB (4090=24GB floor; 5090=32GB. query is in GB, raw JSON is MB)
-MIN_DISK_SPACE = 80  # GB (~34GB models + ComfyUI + venv + SageAttention build + outputs)
+MIN_DISK_SPACE = 60  # GB. Measured on a live 5090 rental 2026-07-26, not guessed:
+# 32GB models + 8.8GB venv + 1.6GB inductor cache + 0.6GB nodes/SageAttention = ~43GB fixed.
+# A generated video costs ~16MB (ComfyUI writes a silent .mp4 AND an -audio.mp4), so 10 60s
+# clips add ~160MB - video count is irrelevant at this scale, the models dominate. 60 leaves
+# ~17GB of headroom. Raise to 80 if you also provision the 720P checkpoint (+17GB).
 MIN_INET_DOWN_SPEED = 5000  # Mb/s floor. Download speed is the real bottleneck, and a hard
 # floor (not the soft cost term below) is what guarantees fast hosts. 5 Gbps costs ~nothing on
 # price - the cheapest 5090s often already have 7+ Gbps. Drop to 2000-3000 if the pool looks thin.
@@ -34,7 +38,7 @@ MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is 
 # real 4.0 x16 hosts and drops the old/crippled slots (where V100/3090-era boards live).
 
 # Cost calculation parameters
-CONTAINER_SIZE_GB = 80  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
+CONTAINER_SIZE_GB = 60  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
 DATA_DOWNLOAD_GB = 34  # GB - actual model payload after dropping the unused fp8 encoder
 MAX_DOWNLOAD_COST = 1.0  # USD cap on total bandwidth for the payload (not a per-GB rate)
 # Per-GB bandwidth price cap derived from the total-cost target above.

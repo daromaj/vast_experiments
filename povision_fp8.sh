@@ -318,9 +318,24 @@ function provisioning_apply_wanvideo_patch() {
     # The patched code reads os.environ at call time, and ComfyUI runs under
     # supervisor, so the variables have to be in ITS environment - exporting them
     # here would do nothing.
+    # R6 is gated on VRAM. Skipping the per-window empty_cache()/gc.collect() is
+    # worth ~9s on a 32GB 5090 that had 6.5GiB spare, but those calls exist to cap
+    # peak VRAM and a 24GB 4090 is already ~1GiB short of holding this pipeline
+    # without block swap. Turning it on there trades a small speedup for OOM risk.
+    # R3 (the y-encode cache) is safe everywhere: it removes work and costs ~4MB.
+    local vram_mb
+    vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
+    local flags='WANOPT_Y_CACHE="1"'
+    if [[ ${vram_mb:-0} -ge 30000 ]]; then
+        flags="${flags},WANOPT_KEEP_CACHE_WARM=\"1\""
+        echo "[WANOPT] ${vram_mb}MB VRAM - enabling R3 + R6"
+    else
+        echo "[WANOPT] ${vram_mb}MB VRAM - enabling R3 only (R6 needs headroom this card lacks)"
+    fi
+
     local conf=/etc/supervisor/conf.d/comfyui.conf
     if [[ -f $conf ]] && ! grep -q WANOPT_Y_CACHE "$conf"; then
-        sed -i 's|^\(environment=PROC_NAME="%(program_name)s"\)$|\1,WANOPT_Y_CACHE="1",WANOPT_KEEP_CACHE_WARM="1"|' "$conf"
+        sed -i "s|^\(environment=PROC_NAME=\"%(program_name)s\"\)\$|\1,${flags}|" "$conf"
         supervisorctl reread >/dev/null 2>&1
         supervisorctl update >/dev/null 2>&1
         supervisorctl restart comfyui >/dev/null 2>&1
