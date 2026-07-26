@@ -14,10 +14,12 @@ Prerequisite: activate the project virtual environment first, e.g.::
     source .venv/bin/activate
 """
 import curses
+import re
 import shlex
 import subprocess
 import json
 import sys
+import urllib.request
 from typing import List, Dict, Optional
 
 # Search criteria
@@ -75,10 +77,12 @@ EXCLUDE_GPU_NAMES = []
 # keyed to the torch ABI this specific image ships. Harvest a fresh one after any
 # bump (povision_fp8.sh prints the ABI-keyed filename on a source build).
 #
-# Check for newer tags with:
-#     curl -s "https://hub.docker.com/v2/repositories/vastai/comfy/tags\
-#?page_size=100&name=cuda-12.9-py312"
-IMAGE = "vastai/comfy:v0.28.0-cuda-12.9-py312"
+# check_for_newer_image() below reports newer tags at startup, so this does not
+# have to be checked by hand.
+IMAGE_REPO = "vastai/comfy"
+IMAGE_VARIANT = "cuda-12.9-py312"  # the flavour we pin within; py312 matches the cp312 wheels
+IMAGE_VERSION = "v0.28.0"
+IMAGE = f"{IMAGE_REPO}:{IMAGE_VERSION}-{IMAGE_VARIANT}"
 
 PROVISIONING_SCRIPT = (
     "https://raw.githubusercontent.com/daromaj/vast_experiments/"
@@ -127,6 +131,55 @@ def build_env_string() -> str:
         '-e OPEN_BUTTON_TOKEN=1',
     ]
     return " ".join(parts)
+
+
+def _parse_version(tag: str) -> Optional[tuple]:
+    """
+    'v0.28.0-cuda-12.9-py312' -> (0, 28, 0). None if it is not our variant.
+
+    Numeric tuples, never string comparison: 'v0.3.60' sorts ABOVE 'v0.28.0'
+    lexically, which would recommend downgrading to a 2025 image.
+    """
+    m = re.match(rf"^v(\d+)\.(\d+)\.(\d+)-{re.escape(IMAGE_VARIANT)}$", tag)
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def check_for_newer_image() -> None:
+    """
+    Report newer vastai/comfy tags in our variant. Advisory only - never blocks
+    or fails the search, since this runs right before spending money and a Docker
+    Hub hiccup is no reason to stop.
+    """
+    url = (
+        f"https://hub.docker.com/v2/repositories/{IMAGE_REPO}/tags"
+        f"?page_size=100&name={IMAGE_VARIANT}"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            results = json.load(resp).get("results", [])
+    except Exception as e:  # noqa: BLE001 - advisory check, never fatal
+        print(f"(image version check skipped: {e})", file=sys.stderr)
+        return
+
+    current = _parse_version(f"{IMAGE_VERSION}-{IMAGE_VARIANT}")
+    tags = [(v, t["name"], (t.get("last_updated") or "")[:10])
+            for t in results if (v := _parse_version(t["name"]))]
+    if not tags or current is None:
+        return
+
+    newest_ver, newest_tag, newest_date = max(tags)
+    if newest_ver > current:
+        newer = sorted((t for t in tags if t[0] > current), reverse=True)
+        print(f"\n  NEWER IMAGE AVAILABLE: {newest_tag} ({newest_date})", file=sys.stderr)
+        print(f"  pinned: {IMAGE_VERSION}-{IMAGE_VARIANT}"
+              f"  ({len(newer)} newer release(s))", file=sys.stderr)
+        print(f"  To bump: set IMAGE_VERSION = \"v{'.'.join(map(str, newest_ver))}\"",
+              file=sys.stderr)
+        print("  Note: a bump invalidates any harvested SageAttention wheel "
+              "(torch ABI changes).\n", file=sys.stderr)
+    else:
+        print(f"Image {IMAGE_VERSION}-{IMAGE_VARIANT} is current "
+              f"(latest: {newest_tag}, {newest_date}).", file=sys.stderr)
 
 
 def run_vastai_search(instance_type: str) -> List[Dict]:
@@ -461,6 +514,9 @@ def main():
     Main function to search, combine, calculate, display, and allow interactive selection.
     """
     print("Starting vast.ai search...\n", file=sys.stderr)
+
+    # Before spending money: is the pinned image still the newest one?
+    check_for_newer_image()
 
     # Search both types
     on_demand_offers = run_vastai_search("on-demand")
