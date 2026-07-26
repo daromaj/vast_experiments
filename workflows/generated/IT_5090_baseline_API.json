@@ -40,7 +40,7 @@
  },
  "125": {
   "inputs": {
-   "audio": "santa_58s.mp3",
+   "audio": "santa_8s.mp3",
    "audioUI": ""
   },
   "class_type": "LoadAudio",

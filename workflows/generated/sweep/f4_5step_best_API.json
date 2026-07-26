@@ -98,7 +98,7 @@
  },
  "134": {
   "inputs": {
-   "blocks_to_swap": 0,
+   "blocks_to_swap": 10,
    "offload_img_emb": false,
    "offload_txt_emb": false,
    "use_non_blocking": true,

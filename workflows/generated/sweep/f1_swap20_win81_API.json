@@ -50,12 +50,12 @@
  },
  "128": {
   "inputs": {
-   "steps": 5,
+   "steps": 4,
    "cfg": 1.0000000000000002,
    "shift": 11.000000000000002,
    "seed": 82364052016591,
    "force_offload": true,
-   "scheduler": "dpm++_sde",
+   "scheduler": "flowmatch_distill",
    "riflex_freq_index": 0,
    "denoise_strength": 1,
    "batched_cfg": false,
@@ -98,7 +98,7 @@
  },
  "134": {
   "inputs": {
-   "blocks_to_swap": 0,
+   "blocks_to_swap": 20,
    "offload_img_emb": false,
    "offload_txt_emb": false,
    "use_non_blocking": true,

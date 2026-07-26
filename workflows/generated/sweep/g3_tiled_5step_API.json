@@ -165,7 +165,7 @@
    "motion_frame": 9,
    "force_offload": false,
    "colormatch": "disabled",
-   "tiled_vae": false,
+   "tiled_vae": true,
    "mode": "infinitetalk",
    "output_path": "",
    "vae": [

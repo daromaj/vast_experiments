@@ -34,11 +34,27 @@ PIP_PACKAGES=(
     # hf_transfer (Rust multi-threaded downloader) + the `hf` CLI for HuggingFace pulls.
     "huggingface_hub[hf_transfer]"
 )
+# Custom nodes are cloned at HEAD, so every rental can get a different version.
+# That has already bitten us twice: the wrapper deleted DownloadAndLoadWav2VecModel
+# (see the WAV2VEC_MODELS note below), and it is the same class of drift as the
+# floating cuda-12.9-auto image tag that used to invalidate the SageAttention
+# wheel. Set NODE_PINS to freeze a repo at a known-good commit when a rental has
+# to reproduce an earlier result exactly.
+#
+# Measured 2026-07-26 on an RTX 5090 (31.36GiB): pinning the wrapper back to
+# 339e0fe (2026-01-23, the last commit before a known-good run) did NOT fix the
+# WanVideoSampler OOM these workflows now hit, so wrapper drift is not the cause
+# of that. The pin is kept for reproducibility, not as a workaround.
 NODES=(
     "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
     "https://github.com/kijai/ComfyUI-MelBandRoFormer"
     "https://github.com/kijai/ComfyUI-KJNodes"
+)
+
+# repo-basename -> commit-ish. Empty by default: pin only when you need to.
+declare -A NODE_PINS=(
+    # ["ComfyUI-WanVideoWrapper.git"]="339e0fe"
 )
 
 WORKFLOWS=(
@@ -574,8 +590,9 @@ function provisioning_get_nodes() {
         dir="${repo##*/}"
         path="${COMFYUI_DIR}/custom_nodes/${dir}"
         requirements="${path}/requirements.txt"
+        pin="${NODE_PINS[$dir]:-}"
         if [[ -d $path ]]; then
-            if [[ ${AUTO_UPDATE,,} != "false" ]]; then
+            if [[ ${AUTO_UPDATE,,} != "false" && -z $pin ]]; then
                 echo "Updating node: ${repo}"
                 ( cd "$path" && git pull )
                 install_requirements "$requirements"
@@ -584,6 +601,13 @@ function provisioning_get_nodes() {
             echo "Downloading node: ${repo}"
             git clone "${repo}" "${path}" --recursive
             install_requirements "$requirements"
+        fi
+        # A pinned node must land on that exact commit whether it was just
+        # cloned or already present from a previous run.
+        if [[ -n $pin ]]; then
+            echo "Pinning ${dir} to ${pin}"
+            ( cd "$path" && git fetch --depth 50 origin "$pin" 2>/dev/null || git fetch origin
+              git checkout -f "$pin" ) || echo "WARNING: could not pin ${dir} to ${pin}"
         fi
     done
     local end_time=$(date +%s)
