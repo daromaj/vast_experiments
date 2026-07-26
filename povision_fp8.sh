@@ -395,10 +395,17 @@ function provisioning_report_disk() {
     # over-provisioning burns storage $/hr, under-provisioning kills the run at 90%.
     echo "[DISK] --- actual consumption ---"
 
-    df -BM "${WORKSPACE}" 2>/dev/null | awk 'NR==2 {
-        gsub(/M/,"",$2); gsub(/M/,"",$3); gsub(/M/,"",$4)
-        printf "[DISK] filesystem total=%dGB used=%dGB avail=%dGB use=%s\n", $2/1024, $3/1024, $4/1024, $5
-        printf "[DISK_DATA] {\"total_gb\": %d, \"used_gb\": %d, \"avail_gb\": %d}\n", $2/1024, $3/1024, $4/1024
+    # NOT df: on Vast the container sees the HOST overlay (a 3.6TB filesystem),
+    # not the --disk allocation, so df reports numbers that have nothing to do
+    # with the quota we are paying for. du of the workspace is the real figure.
+    local used_bytes
+    used_bytes=$(du -sb "${WORKSPACE}" 2>/dev/null | awk '{print $1}')
+    [[ -z $used_bytes ]] && used_bytes=0
+    # LC_ALL=C or awk's %.1f emits a decimal comma under a European locale, which
+    # makes the [DISK_DATA] line invalid JSON and silently unparseable.
+    LC_ALL=C awk -v b="$used_bytes" 'BEGIN {
+        printf "[DISK] workspace used=%.1fGB (df is the host overlay on Vast, not the --disk quota)\n", b/1073741824
+        printf "[DISK_DATA] {\"used_gb\": %.1f}\n", b/1073741824
     }'
 
     # Per-directory, so we can see whether trimming models or the build tree pays.

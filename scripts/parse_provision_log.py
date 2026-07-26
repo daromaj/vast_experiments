@@ -150,24 +150,17 @@ def render(report):
         out.append("DISK")
         out.append("=" * 68)
         if disk:
-            out.append(
-                f"  provisioned {disk['total_gb']}GB, used {disk['used_gb']}GB, "
-                f"{disk['avail_gb']}GB free"
-            )
+            out.append(f"  workspace consumed: {disk['used_gb']}GB")
         for d in report.get("disk_dirs", []):
             out.append(f"  {d['size']:>8}  {d['path']}")
         if disk:
-            # Headroom for outputs and ComfyUI's cache, on top of what provisioning
-            # left behind. Under 10GB is where a long render starts risking ENOSPC.
-            used = disk["used_gb"]
-            if disk["avail_gb"] < 10:
-                out.append(f"  -> TIGHT: only {disk['avail_gb']}GB free. Raise --disk.")
-            else:
-                suggested = used + 15
-                out.append(
-                    f"  -> {used}GB consumed; --disk {suggested} would leave ~15GB "
-                    f"for outputs (currently provisioning {disk['total_gb']}GB)."
-                )
+            # Free space cannot be read on Vast (df shows the host overlay, not the
+            # --disk quota), so this recommends off consumption alone: what was used
+            # plus room for generated video.
+            suggested = int(disk["used_gb"]) + 18
+            out.append(
+                f"  -> --disk {suggested} would cover this plus ~18GB for outputs."
+            )
 
     out.append("")
     out.append("=" * 68)
