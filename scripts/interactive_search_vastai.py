@@ -445,9 +445,18 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
     def _draw_menu(stdscr, offers, selected_row_idx):
         stdscr.clear()
 
-        # Init color pair for highlighting
+        # Type-coded rows: on-demand (fixed price, cannot be outbid) = green,
+        # bid (interruptible - can be killed mid-render) = yellow. The selected
+        # row keeps its type color and adds reverse video, so which offer is
+        # selected AND what it will cost you are both readable at a glance.
         curses.start_color()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight selected row
+        try:
+            curses.use_default_colors()
+            bg = -1  # keep the terminal's own background
+        except curses.error:
+            bg = curses.COLOR_BLACK
+        curses.init_pair(2, curses.COLOR_GREEN, bg)   # on-demand
+        curses.init_pair(3, curses.COLOR_YELLOW, bg)  # bid
 
         # Get table width from the shared column spec (header + rows use the same)
         header_width = table_width()
@@ -488,9 +497,13 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         lines.append("")
         lines.append(f"Down = host inet_down (advertised). DLm = est. minutes to pull {IMAGE_PULL_GB}GB image + {DATA_DOWNLOAD_GB}GB models (the real time sink on slow hosts).")
         lines.append("")
-        lines.append("BID offers create interruptible (auto --bid_price); on-demand offers create fixed-price.")
+        lines.append("Row colors: GREEN = on-demand, fixed-price. YELLOW = bid, interruptible (auto --bid_price) - can be outbid mid-render.")
         lines.append("")
         lines.append("Use UP/DOWN arrows to navigate, ENTER to select, Q to quit")
+
+        # Offer rows occupy lines [FIRST_OFFER_ROW, FIRST_OFFER_ROW + len(offers)):
+        # line 0 = title, 1 = "===", 2 = column header, 3 = divider, then the offers.
+        FIRST_OFFER_ROW = 4
 
         # Draw lines
         max_y, max_x = stdscr.getmaxyx()
@@ -498,20 +511,15 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
             if i < max_y:
                 truncated = line[:max_x-1]
                 try:
-                    if i >= len(lines) - 10:  # Instructions at bottom
-                        stdscr.addstr(i, 0, truncated)
+                    offer_idx = i - FIRST_OFFER_ROW
+                    if 0 <= offer_idx < len(offers):
+                        itype = offers[offer_idx].get('instance_type', '')
+                        attr = curses.color_pair(3 if itype == 'bid' else 2)
+                        if offer_idx == selected_row_idx:
+                            attr |= curses.A_REVERSE | curses.A_BOLD
+                        stdscr.addstr(i, 0, truncated, attr)
                     else:
-                        row_idx = i - len(lines) + 10  # Calculate actual row index for offers
-                        if i >= 4 and i < 4 + len(offers):
-                            row_idx = i - 4
-                            if row_idx == selected_row_idx:
-                                stdscr.attron(curses.color_pair(1))
-                                stdscr.addstr(i, 0, truncated)
-                                stdscr.attroff(curses.color_pair(1))
-                            else:
-                                stdscr.addstr(i, 0, truncated)
-                        else:
-                            stdscr.addstr(i, 0, truncated)
+                        stdscr.addstr(i, 0, truncated)
                 except curses.error:
                     pass
 
@@ -522,7 +530,13 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         current_row = 0
         _draw_menu(stdscr, offers, current_row)
         while True:
-            key = stdscr.getch()
+            try:
+                key = stdscr.getch()
+            except KeyboardInterrupt:
+                # Treat Ctrl+C like Q: leave via the normal return path so
+                # curses.wrapper restores the terminal (no traceback, no
+                # wrecked tty).
+                return None
             if key == curses.KEY_UP and current_row > 0:
                 current_row -= 1
             elif key == curses.KEY_DOWN and current_row < len(offers) - 1:
@@ -530,6 +544,10 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
             elif key in [10, 13, curses.KEY_ENTER]:
                 break
             elif key in [ord('q'), ord('Q')]:
+                # Deliberately NOT Esc (27): arrow keys arrive as the escape
+                # sequence ESC '[' 'B', and when keypad decoding does not fold
+                # that into KEY_DOWN the lone ESC lands here - making an arrow
+                # press quit the app. Verified reproducing under a pty.
                 return None
             _draw_menu(stdscr, offers, current_row)
         return current_row
@@ -577,7 +595,6 @@ def main():
 
     if selected_idx is None:
         print("Selection cancelled.")
-        curses.endwin()  # Just in case
         return
 
     # Create the selected instance (bid or on-demand per its type)
@@ -593,4 +610,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl+C outside the curses loop: during the searches, the image-version
+        # check, or the final y/n confirm.
+        print("\nInterrupted. Exiting.", file=sys.stderr)
+        sys.exit(130)
