@@ -140,8 +140,47 @@ carry this configuration (sageattn, `tiled_vae=false`, 81-frame window,
 `max-autotune-no-cudagraphs`); nothing in them needed changing once the wheel
 was fixed.
 
-Quality has NOT been assessed yet — these are speed numbers only. Compare the
-pulled videos before adopting 4-step as the default.
+### Quality — assessed 2026-07-27
+
+**4-step does not cost visible quality.** Measured with
+`scripts/quality_metrics.py` over the full clips, plus frame strips from
+`scripts/compare_quality.py` in `notes/quality/`:
+
+| | edge energy (sharpness) | frame-to-frame delta |
+|---|---|---|
+| 6step dpm++_sde sdpa | 35.81 | 1.122 |
+| 4step distill sdpa | 35.63 | 1.048 |
+| 4step distill sage | 35.64 | 1.033 |
+
+Sharpness differs by **0.5%** — noise. Frames at 1/3/5/7 s show identical
+composition, lighting, beard and fur detail; an amplified difference map is flat
+across background, tree and desk, with residual only on the subject's silhouette,
+i.e. pose drift rather than texture loss.
+
+**SSIM between 4-step sdpa and 4-step sage is 0.973.** Same seed, same sampler,
+only the attention kernel differs, so this is the cleanest available read on
+whether SageAttention changes output: it does, slightly — it is quantized
+attention, not a bit-exact reimplementation — but not visibly.
+
+Two caveats on these numbers:
+
+- The frame-to-frame delta conflates flicker with how much the subject actually
+  moves. 4-step scoring lower is **not** evidence of better temporal stability;
+  a clip with less head motion scores the same way. Do not quote it as a win.
+- SSIM between 6-step and 4-step is 0.896, and that figure means nothing about
+  quality. Different scheduler and step count means the denoising trajectories
+  diverge from the first step, so it measures divergence. It is recorded only to
+  stop someone computing it later and reading it as degradation.
+
+These comparisons are valid because every sweep workflow starts from the same
+base seed and `bump_seeds()` is deterministic (`base + run*1000 + 7`), so run 2
+of every variant sampled identical noise. Both variants also carry the same
+distill LoRA at strength 1, so the LoRA is not a confound; what differs between
+the 4-step and 6-step arms is step count **and** scheduler
+(`flowmatch_distill` vs `dpm++_sde`), which cannot be separated — the distill
+scheduler is what makes 4 steps viable.
+
+**Verdict: adopt 4-step.** The 2.41x is free.
 
 Outputs pulled to `output/vast_45930851/` (gitignored, kept locally). The second
 file of each pair is the measured run:
@@ -155,9 +194,16 @@ file of each pair is the measured run:
 | `InfiniteTalk_00011/00012` | s4_baseline_sdpa (6-step reference) |
 | `InfiniteTalk_00013/00014` | **s5_sage_untiled** (fastest) |
 
-Compare `00014` (4-step sage) against `00012` (6-step baseline) — that is the
-quality question that decides whether the 2.41× is free. `00006` (4-step sdpa)
-isolates the attention backend from the step count.
+The pairs that isolate one variable each (this guidance was previously stated
+backwards — `00014` vs `00012` differs in step count *and* attention backend, so
+it answers neither question cleanly):
+
+- **Step count + scheduler:** `00006` (4-step distill, sdpa) vs `00012` (6-step
+  dpm++_sde, sdpa) — attention held constant.
+- **Attention backend:** `00006` (4-step sdpa) vs `00014` (4-step sage) —
+  sampler held constant.
+
+Both were assessed above; 4-step passes.
 
 ### Measurement trap worth keeping
 
@@ -170,7 +216,13 @@ what run 2 is meant to measure.
 
 ## Decision
 
-- 4step passes quality → make it the new default, retire the 6-step baseline.
+**Resolved 2026-07-27: 4step passed quality — it is the default, the 6-step
+baseline is retired.** Sharpness within 0.5% of 6-step, no visible artifacts,
+and SageAttention is visually equivalent to sdpa at SSIM 0.973.
+
+The contingencies that no longer apply, kept because they are the right ladder
+if a future model or resolution regresses:
+
 - 4step fails, 5step passes → use 5step.
 - Both fail quality → isolate which lever broke it: re-test with fp8_fast OFF (quant back to `disabled`, merge_loras `false`) at 4/5 steps to see if fp8 or the step cut is the culprit.
 

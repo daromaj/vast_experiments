@@ -143,6 +143,14 @@ not been measured on a full 58 s clip — do not quote it as if it had been.
 Isolated attention kernel at the real shape (40 heads x 32,760 tokens x 128 dim):
 **sageattn 39.1 ms vs sdpa 106.9 ms**.
 
+**Quality checked 2026-07-27 — the 2.93x is free.** 4-step distill scores within
+**0.5%** of the 6-step baseline on edge energy (sharpness) across the full clip,
+with no visible artifacts in matched frames and difference maps flat everywhere
+except the subject's silhouette. SageAttention vs sdpa at identical sampler and
+seed: **SSIM 0.973** — quantized attention does change the output slightly, just
+not visibly. Details, caveats and the metrics that do *not* mean what they look
+like: `july_test.md`. Frame strips in `notes/quality/`.
+
 720p (1280x720) does fit on a 5090 at `blocks_to_swap=0` — 27.8 GiB peak with
 `tiled_vae=true` — but costs ~4.4x wall-clock, and there is no 720p lightx2v
 distill LoRA published (only 480p ranks exist), so the 4-step LoRA is a mismatch
