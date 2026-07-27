@@ -17,8 +17,13 @@ occupancy plus the download.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import interactive_search_vastai as iv  # noqa: E402
 
 DOWNLOAD_GB = 34.0
 # Rental time for one 58 s video end to end EXCLUDING the model download:
@@ -43,14 +48,38 @@ def search(gpu, min_speed, max_dph):
         print(out.stderr.strip(), file=sys.stderr)
         return []
     try:
-        return json.loads(out.stdout)
+        offers = json.loads(out.stdout)
     except json.JSONDecodeError:
         print("could not parse vastai output", file=sys.stderr)
         return []
 
+    # Tag the market explicitly. The query passes -d, so these are on-demand
+    # offers, but the raw JSON does not always carry instance_type and
+    # iv.create_instance defaults a missing value to 'bid' - which silently
+    # rents an interruptible box that can be reclaimed mid-render.
+    for o in offers:
+        o["instance_type"] = "on-demand"
+    return offers
+
 
 def main():
     ap = argparse.ArgumentParser()
+    # agent_vastai.py cannot rent these hosts: its create path re-runs the main
+    # search, which filters inet_down >= 5000, and a cheap-egress host is
+    # typically well under that. So creating has to live here, next to the
+    # search that can actually see them. The instance itself is still built by
+    # iv.create_instance, so image, env and disk stay single-sourced.
+    ap.add_argument("--create", type=int, metavar="MACHINE_ID",
+                    help="rent this machine_id from the ranked results")
+    # Naming a machine_id read from an earlier listing loses a race often enough
+    # to be the normal case, not the exception: the cheap-egress hosts are the
+    # contended ones, and two attempts in a row failed within a second of the
+    # host appearing in a listing. This ranks and rents in one process, so there
+    # is no window between choosing and asking.
+    ap.add_argument("--create-best", action="store_true",
+                    help="rent the top-ranked offer from this same search")
+    ap.add_argument("--skip", type=int, nargs="*", default=[],
+                    help="machine_ids to pass over (already tried, or known bad)")
     ap.add_argument("--gpu", default="RTX 5090")
     ap.add_argument("--max-cost-per-tb", type=float, default=1.5,
                     help="egress ceiling in $/TB (vast reports $/GB)")
@@ -78,6 +107,31 @@ def main():
         rows.append((rental + download, download, rental, dl_min, o))
 
     rows.sort(key=lambda r: r[0])
+
+    if args.create is not None or args.create_best:
+        if args.create_best:
+            cands = [r for r in rows if r[4].get("machine_id") not in args.skip]
+        else:
+            cands = [r for r in rows if r[4].get("machine_id") == args.create]
+        if not cands:
+            what = "no offer left" if args.create_best else f"machine {args.create}"
+            print(f"{what} in the current ranked results (taken, or outside the "
+                  "egress/speed ceiling) - re-run search", file=sys.stderr)
+            return 1
+        # Walk the ranking: an offer can vanish between ranking and asking, and
+        # the next one down is still a good rental.
+        for total, dl, rent, dl_min, offer in cands:
+            print(f"machine {offer['machine_id']} offer {offer['id']}: "
+                  f"{offer.get('gpu_name')} ${offer.get('dph_total'):.3f}/hr "
+                  f"egress ${(offer.get('inet_down_cost') or 0) * 1000:.2f}/TB "
+                  f"{offer.get('inet_down', 0):.0f}Mb/s {offer.get('geolocation')} "
+                  f"rel={offer.get('reliability2', 0):.3f} -> one-shot ${total:.3f}")
+            if iv.create_instance(offer):
+                return 0
+            if not args.create_best:
+                return 1
+            print("  that offer did not take - trying the next", file=sys.stderr)
+        return 1
 
     hdr = (f"{'machine':>8} {'$/hr':>6} {'$/TB':>6} {'down':>6} {'dl_min':>7} "
            f"{'rental':>7} {'egress':>7} {'1-shot':>7} {'loc':<16} {'rel':>5}")
