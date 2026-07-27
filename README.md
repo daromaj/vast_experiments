@@ -262,12 +262,24 @@ on 32 GB.
 **Only 60% of the bill is generation.** The other 7 m 20 s is provisioning and
 boot, paid once per video in this mode instead of amortised over a sweep.
 
-**The cold compile costs ~75 s, not ~32 s.** The render was 664.8 s against
-589.9 s for the same workflow on a warm inductor cache. The 32.4 s cold/warm
-delta measured on an 8 s clip does not carry over — a longer clip compiles more
-graph variants. It still pays for itself: without `torch.compile` the loss is
-roughly 10 s per window across 21 windows. The warmup that does *not* pay back
-on a single video is s8/R2, the VAE decoder compile, at 646.5 s.
+**The cold compile costs *at least* ~75 s, not ~32 s.** The render was 664.8 s
+against 589.9 s for the same workflow on a warm inductor cache, so the 32.4 s
+cold/warm delta measured on an 8 s clip does not carry over — a longer clip
+compiles more graph variants.
+
+That 75 s is a **floor, not an estimate**, and the two runs are not a clean A/B.
+The 589.9 s run predates the WANOPT patch being enabled (it produced clip
+`00016`; the flags were first switched on after s8, clip `00019`), while the e2e
+run had `WANOPT_Y_CACHE` and `WANOPT_KEEP_CACHE_WARM` both set by provisioning.
+R3/R6 was therefore speeding up the *cold* run, which drags the apparent gap
+down. Correcting for the ~9.4 s those flags are worth on an 8 s clip puts the
+real cold penalty nearer ~140 s. Compile still wins on a single 58 s video —
+without it the loss is roughly 10 s per window across 21 windows, ~215 s — but
+the margin is thinner than the raw subtraction suggests. A same-box A/B has not
+been run.
+
+The warmup that does *not* pay back on a single video is s8/R2, the VAE decoder
+compile, at 646.5 s.
 
 Provisioning was 5 m 59 s of which **4 m 01 s was `apt install`** — host
 variance, not a regression. SageAttention cost 12 s: the cached `sm_120` wheel

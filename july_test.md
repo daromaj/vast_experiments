@@ -294,18 +294,31 @@ keeps more. Still comfortable on 32 GB.
 **Only 60% of the wall clock is generation.** The remaining 7 m 20 s is boot and
 provisioning.
 
-### The cold-compile penalty is ~75 s, not ~33 s
+### The cold-compile penalty is at least ~75 s, not ~33 s
 
 The render took 664.8 s against 589.9 s for the same workflow on a warm inductor
 cache. The ~33 s cold/warm delta measured on an 8 s clip **does not carry over** —
 a longer clip exercises more graph variants, so more gets compiled. Do not
 extrapolate warmup cost from short clips.
 
-It still pays for itself on a single 58 s video: without `torch.compile` the loss
-is roughly 10 s per window across 21 windows, well over the 75 s it costs. The
-warmup that genuinely does *not* pay back one-shot remains **R2**, the VAE decoder
-compile, at 646.5 s — which is why `full58_sage_API.json` (the s5 lineage) is the
-right workflow for this mode and s8 is not.
+**Treat 75 s as a floor.** These two runs differ in two variables, not one. The
+589.9 s figure was measured *before* the WANOPT patch was ever enabled on that
+rental — it emitted clip `00016`, and `finish_480p.log` shows the flags being set
+for the first time only after s8 finished (clip `00019`), the patch being inert
+until then because it is env-gated. The e2e run had both `WANOPT_Y_CACHE` and
+`WANOPT_KEEP_CACHE_WARM` set automatically at provisioning. So R3/R6 was making
+the *cold* run faster while the warm run had no such help, which compresses the
+measured gap. Adjusting by the ~9.4 s those flags are worth on an 8 s clip
+suggests a true cold penalty nearer **~140 s**.
+
+The conclusion survives the correction but with less room: `torch.compile` saves
+roughly 10 s per window over 21 windows (~215 s) against a ~140 s cold cost, so
+it still pays on a single 58 s video. What would settle it is a same-box A/B —
+compile on vs off, both cold, one 58 s clip each — which has not been run.
+
+The warmup that genuinely does *not* pay back one-shot remains **R2**, the VAE
+decoder compile, at 646.5 s — which is why `full58_sage_API.json` (the s5
+lineage) is the right workflow for this mode and s8 is not.
 
 Provisioning was 5 m 59 s, of which **4 m 01 s was `apt install`** — host
 variance, not a regression. SageAttention cost 12 s: the cached `sm_120` wheel
