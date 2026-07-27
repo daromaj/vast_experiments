@@ -230,6 +230,67 @@ torch.compile warmup — run 1 versus run 2 above is 230.4 s versus 105.2 s on a
 8 s clip. For a **one-shot rental** (provision, render once, destroy) that warmup
 is pure overhead, and `max-autotune` only starts paying from the second render.
 
+### 2026-07-27 — one-shot rental, end to end (measured)
+
+Rent a 5090, make one 58 s video, destroy it. **18 m 29 s of billed wall clock**,
+instance `45967149` on a $0.481/hr host. Every number below is a stamp taken as
+the run happened (`output/e2e_*/phases.tsv`), not scraped from logs afterwards.
+
+| Phase | Duration |
+|---|---|
+| create → ssh reachable | 0 m 49 s |
+| provisioning | 6 m 27 s |
+| upload workflow + assets | 0 m 04 s |
+| **render 58 s clip (cold cache)** | **11 m 06 s** |
+| download outputs | 0 m 02 s |
+| destroy | 0 m 01 s |
+| **total** | **18 m 29 s** |
+
+Output: 60.84 s, 480x832, 1521 frames, 8.6 MB. Peak VRAM 26,474 MiB — higher
+than the ~24.4 GiB seen earlier because `WANOPT_KEEP_CACHE_WARM=1` skips the
+per-window `soft_empty_cache()`, so the allocator keeps more. Still comfortable
+on 32 GB.
+
+**Only 60% of the bill is generation.** The other 7 m 20 s is provisioning and
+boot, paid once per video in this mode instead of amortised over a sweep.
+
+**The cold compile costs ~75 s, not ~32 s.** The render was 664.8 s against
+589.9 s for the same workflow on a warm inductor cache. The 32.4 s cold/warm
+delta measured on an 8 s clip does not carry over — a longer clip compiles more
+graph variants. It still pays for itself: without `torch.compile` the loss is
+roughly 10 s per window across 21 windows. The warmup that does *not* pay back
+on a single video is s8/R2, the VAE decoder compile, at 646.5 s.
+
+Provisioning was 5 m 59 s of which **4 m 01 s was `apt install`** — host
+variance, not a regression. SageAttention cost 12 s: the cached `sm_120` wheel
+passed its probe and the source build was cancelled. Model download was 1 m 38 s
+for 34 GB on a 7,944 Mb/s link.
+
+#### Cost, and why the search criteria were wrong
+
+At this host: 0.308 h x $0.481 = **$0.148 rental + $0.088 egress = ~$0.236**.
+
+Egress is **37% of the bill**. `interactive_search_vastai.py` filters on
+`inet_down >= 5000` Mb/s, which for a one-shot rental is backwards: the 34 GB of
+models is paid *per video*, so $/GB matters more than link speed, and every host
+passing that filter charged $2.60–$10.00/TB. Ranking the same GPUs by full
+one-shot cost instead (`scripts/search_cheap_egress.py`):
+
+| machine | $/hr | $/TB | down Mb/s | one-shot |
+|---|---|---|---|---|
+| 32637 (Alberta) | 0.482 | **0.33** | 1,834 | **$0.142** |
+| 54134 (Nebraska) | 0.534 | **0.00** | 1,699 | $0.147 |
+| 108568 (Malaysia) | 0.401 | 1.30 | 1,377 | $0.159 |
+| 141151 (the host used here) | 0.481 | 2.60 | 7,944 | $0.204 |
+
+A 4x slower link adds ~1 min of download, worth ~$0.015 of rental, while the
+cheaper egress saves ~$0.078. **Cheap egress beats a fast link**, and the
+ordering survives charging each host for its own download time.
+
+Caveat on the $0.236 vs $0.204 gap: the table prices 0.23 h of rental plus
+download, while this run actually billed 0.308 h — the 4-minute apt stall is in
+the real number and not in the model.
+
 ### Disk sizing
 
 Measured on a live 5090 rental after a full provision + several renders:
