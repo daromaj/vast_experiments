@@ -29,9 +29,11 @@ MIN_DISK_SPACE = 60  # GB. Measured on a live 5090 rental 2026-07-26, not guesse
 # A generated video costs ~16MB (ComfyUI writes a silent .mp4 AND an -audio.mp4), so 10 60s
 # clips add ~160MB - video count is irrelevant at this scale, the models dominate. 60 leaves
 # ~17GB of headroom. Raise to 80 if you also provision the 720P checkpoint (+17GB).
-MIN_INET_DOWN_SPEED = 5000  # Mb/s floor. Download speed is the real bottleneck, and a hard
-# floor (not the soft cost term below) is what guarantees fast hosts. 5 Gbps costs ~nothing on
-# price - the cheapest 5090s often already have 7+ Gbps. Drop to 2000-3000 if the pool looks thin.
+MIN_INET_DOWN_SPEED = 2500  # Mb/s floor. Was 5000, which cost real money: every host clearing
+# it charged $2.60-$10.00/TB egress, and on a one-shot rental the 34GB payload is paid per video.
+# 2500 is set from the failure side - machine 69187 advertised 1311 Mb/s and had still not pulled
+# the 9.5GB container image after 14 minutes, so the floor exists to keep hosts that cannot serve
+# a fast pull out of the results entirely, not to chase the fastest link available.
 MAX_DPH = 0.60  # $/hr hard cap on rental price - very fast hosts get pricey, this reins it in
 MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is ~31.5 GB/s
 # theoretical (~20-26 measured); PCIe 3.0 x16 and 4.0 x8 both cap at ~15.75. A 20 floor keeps
@@ -40,6 +42,18 @@ MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is 
 # Cost calculation parameters
 CONTAINER_SIZE_GB = 60  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
 DATA_DOWNLOAD_GB = 34  # GB - actual model payload after dropping the unused fp8 encoder
+IMAGE_PULL_GB = 9.5  # GB - vastai/comfy:v0.28.0-cuda-12.9-py312, compressed size per Docker Hub.
+# Pulled from Docker Hub on every fresh rental, before provisioning starts and before ssh answers.
+# It costs TIME but not MONEY: the 2026-07-27 e2e run billed bwd = 34.4 GB, i.e. the models alone,
+# so vast does not charge egress on the image pull. That is why it belongs in the time term below
+# and not in download_cost_total - and why a $-only ranking was blind to a 14-minute stall.
+SPEED_DERATE = 0.35  # Advertised inet_down is what the host claims; pulls rarely approach it.
+# 69187 at 1311 Mb/s should have pulled 9.5GB in under a minute and had not finished in 14, while
+# 54134 at 1699 Mb/s had ssh up in 52s. Advertised speed is a weak predictor - derate it hard.
+TIME_VALUE_USD_PER_MIN = 0.02  # What a minute of waiting is worth, used to rank cost against
+# speed in one number. $0.02/min says five cents buys about two and a half minutes. Ranking on $
+# alone picks hosts that stall; ranking on time alone invites being gouged for a faster link.
+# Set to 0 to rank purely on money; raise it when the video is wanted now.
 MAX_DOWNLOAD_COST = 1.0  # USD cap on total bandwidth for the payload (not a per-GB rate)
 # Per-GB bandwidth price cap derived from the total-cost target above.
 MAX_INET_COST = MAX_DOWNLOAD_COST / DATA_DOWNLOAD_GB  # $/GB
@@ -257,11 +271,15 @@ def calculate_total_cost(offer: Dict) -> float:
     download_cost_total = DATA_DOWNLOAD_GB * inet_down_cost
 
     # Rental burned WHILE the payload downloads. This is the real reason a slow host is
-    # expensive: you pay dph the whole time it's pulling models. Converts speed -> $ so a
+    # expensive: you pay dph the whole time it's pulling. Converts speed -> $ so a
     # cheaper-but-slower host is weighed fairly against a pricey-but-fast one.
-    inet_down_mbps = offer.get('inet_down', 0) or 0
+    # Both pulls count: the container image first, then the models. Charging only for the
+    # models understated a slow host by ~28% of its download time and hid the fact that the
+    # image pull happens before ssh even answers, where nothing is watching it.
+    inet_down_mbps = (offer.get('inet_down', 0) or 0) * SPEED_DERATE
+    pull_gb = DATA_DOWNLOAD_GB + IMAGE_PULL_GB
     if inet_down_mbps > 0:
-        download_seconds = (DATA_DOWNLOAD_GB * 8 * 1000) / inet_down_mbps  # GB->gigabit->megabit / Mbps
+        download_seconds = (pull_gb * 8 * 1000) / inet_down_mbps  # GB->gigabit->megabit / Mbps
     else:
         download_seconds = 0
     offer['download_minutes'] = download_seconds / 60
@@ -269,7 +287,11 @@ def calculate_total_cost(offer: Dict) -> float:
 
     total_cost = dph + storage_cost_hourly + download_cost_total + wasted_rental
 
-    return total_cost
+    # Price the wait itself, not just the rental burned during it. Without this the ranking
+    # is indifferent between a video in 16 minutes and a video in 30 for the same dollar.
+    offer['wait_penalty'] = offer['download_minutes'] * TIME_VALUE_USD_PER_MIN
+
+    return total_cost + offer['wait_penalty']
 
 
 # Single source of truth for the results table layout: (label, width, align).
@@ -448,6 +470,8 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         lines.append("=" * header_width)
         lines.append("")
         lines.append(f"Est$/h = rental(1hr) + storage({CONTAINER_SIZE_GB}GB/1hr) + download charge({DATA_DOWNLOAD_GB}GB) + rental burned during download")
+        lines.append(f"         + wait penalty (${TIME_VALUE_USD_PER_MIN}/min). Download = {IMAGE_PULL_GB}GB image + {DATA_DOWNLOAD_GB}GB models at {SPEED_DERATE:.0%} of advertised speed;")
+        lines.append(f"         the image pull is billed as time only - vast charges egress on the models alone.")
         lines.append("")
         gpu_filter = ", ".join(INCLUDE_GPU_NAMES) if INCLUDE_GPU_NAMES else "any"
         for fline in [
@@ -462,7 +486,7 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
         ]:
             lines.append(fline)
         lines.append("")
-        lines.append(f"Down = host inet_down. DLm = est. minutes to pull {DATA_DOWNLOAD_GB}GB (the real time sink on slow hosts).")
+        lines.append(f"Down = host inet_down (advertised). DLm = est. minutes to pull {IMAGE_PULL_GB}GB image + {DATA_DOWNLOAD_GB}GB models (the real time sink on slow hosts).")
         lines.append("")
         lines.append("BID offers create interruptible (auto --bid_price); on-demand offers create fixed-price.")
         lines.append("")

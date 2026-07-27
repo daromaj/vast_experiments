@@ -18,6 +18,12 @@
 # WanVideoModelLoader while still reporting a "result".
 set -uo pipefail
 
+# Ignore SIGPIPE. Piping this script to `head` killed it one line after the
+# create call - past the point where an instance exists, before the deadman is
+# armed and the destroy trap is installed - leaving a rental billing with
+# nothing watching it. Output truncation must never be able to orphan a box.
+trap '' PIPE
+
 # No machine_id argument: the host is chosen and rented inside one search, so
 # there is no window in which the chosen offer can be taken by someone else.
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +34,8 @@ mkdir -p "$RUN_DIR"
 PHASES="$RUN_DIR/phases.tsv"
 : > "$PHASES"
 
-ARMS=(a_autotune b_default c_nocompile)
+# Override to re-run a single arm: ARMS="b_default" ./scripts/e2e_compile_ab.sh
+read -r -a ARMS <<< "${ARMS:-a_autotune b_default c_nocompile}"
 AUDIO=input_files/santa_58s.mp3
 IMAGE=input_files/santa-classic-portrait.png
 RUN_TIMEOUT=3600
@@ -127,6 +134,13 @@ stamp uploaded
 # each mode actually compiled, independent of wall-clock.
 for arm in "${ARMS[@]}"; do
     say "arm $arm (cold cache)"
+    # Wipe the inductor cache. The first version of this script did not, on the
+    # assumption that inductor keys entries by mode so the arms could not share
+    # them. That assumption was never verified, and it left arm B starting from
+    # arm A's 360 MiB of autotuned kernels - so "cold default" could not be
+    # told apart from "warm autotune". Deleting it costs seconds and removes
+    # the ambiguity entirely.
+    rsh 'rm -rf /tmp/torchinductor_root' 120
     rsh 'supervisorctl restart comfyui >/dev/null 2>&1; for i in $(seq 1 60); do
              curl -s -m 5 http://127.0.0.1:18188/system_stats >/dev/null 2>&1 && { sleep 2; exit 0; }
              sleep 5

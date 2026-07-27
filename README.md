@@ -236,7 +236,8 @@ for its ABI; a matching `sm_89` wheel is now committed under
 Queueable is not the same as having a video. The first generation pays the
 torch.compile warmup — run 1 versus run 2 above is 230.4 s versus 105.2 s on an
 8 s clip. For a **one-shot rental** (provision, render once, destroy) that warmup
-is pure overhead, and `max-autotune` only starts paying from the second render.
+is pure overhead: measured on one box, `max-autotune` is *slower* than not
+compiling at all on a single 58 s clip. See the A/B below.
 
 ### 2026-07-27 — one-shot rental, end to end (measured)
 
@@ -265,36 +266,58 @@ boot, paid once per video in this mode instead of amortised over a sweep.
 **The cold compile costs *at least* ~75 s, not ~32 s.** The render was 664.8 s
 against 589.9 s for the same workflow on a warm inductor cache, so the 32.4 s
 cold/warm delta measured on an 8 s clip does not carry over — a longer clip
-compiles more graph variants.
+compiles more graph variants. That 75 s is a floor: the 589.9 s run predates the
+WANOPT patch being enabled, so R3/R6 was speeding up the *cold* run and dragging
+the apparent gap down.
 
-That 75 s is a **floor, not an estimate**, and the two runs are not a clean A/B.
-The 589.9 s run predates the WANOPT patch being enabled (it produced clip
-`00016`; the flags were first switched on after s8, clip `00019`), while the e2e
-run had `WANOPT_Y_CACHE` and `WANOPT_KEEP_CACHE_WARM` both set by provisioning.
-R3/R6 was therefore speeding up the *cold* run, which drags the apparent gap
-down. Correcting for the ~9.4 s those flags are worth on an 8 s clip puts the
-real cold penalty nearer ~140 s. Compile still wins on a single 58 s video —
-without it the loss is roughly 10 s per window across 21 windows, ~215 s — but
-the margin is thinner than the raw subtraction suggests. A same-box A/B has not
-been run.
+What that comparison could not answer is whether compiling is worth anything at
+all on a one-shot rental. It is not — see the same-box A/B below, which
+supersedes the "compile saves ~215 s across 21 windows" figure previously
+claimed here. That number was never measured; it was extrapolated from an 8 s
+clip and is wrong.
 
-The warmup that does *not* pay back on a single video is s8/R2, the VAE decoder
-compile, at 646.5 s.
+The other warmup that does not pay back on a single video is s8/R2, the VAE
+decoder compile, at 646.5 s.
 
 Provisioning was 5 m 59 s of which **4 m 01 s was `apt install`** — host
 variance, not a regression. SageAttention cost 12 s: the cached `sm_120` wheel
 passed its probe and the source build was cancelled. Model download was 1 m 38 s
 for 34 GB on a 7,944 Mb/s link.
 
-#### Cost, and why the search criteria were wrong
+#### Cost — billed, not modelled
 
-At this host: 0.308 h x $0.481 = **$0.148 rental + $0.088 egress = ~$0.236**.
+`vastai show invoices-v1 --charges` returns what was actually taken. For this run
+(`45967149`), **$0.262**:
 
-Egress is **37% of the bill**. `interactive_search_vastai.py` filters on
-`inet_down >= 5000` Mb/s, which for a one-shot rental is backwards: the 34 GB of
-models is paid *per video*, so $/GB matters more than link speed, and every host
-passing that filter charged $2.60–$10.00/TB. Ranking the same GPUs by full
-one-shot cost instead (`scripts/search_cheap_egress.py`):
+| line | quantity | rate | amount |
+|---|---|---|---|
+| gpu | 0.3452 h | $0.480/h | $0.166 |
+| disk | 0.3491 h | $0.017/h | $0.006 |
+| bwd (download in) | 34.4 GB | $0.0026/GB | $0.090 |
+| bwu (upload out) | ~0 | | $0.000 |
+| **total** | | | **$0.262** |
+
+I had modelled $0.236 — **11% low**, from two mistakes worth remembering:
+
+- **vast bills 0.345 h against 18 m 29 s (0.308 h) of wall clock.** Billing
+  starts before ssh answers and does not stop the instant destroy is issued;
+  budget ~10% more hours than the stopwatch shows.
+- **disk is its own line**, charged for slightly longer than the GPU, and I had
+  omitted it entirely.
+
+The itemisation also confirms what dominates: **egress is 34% of the bill**, and
+the GPU only 63%.
+
+Note the CLI's date handling — `--start-date` alone throws a `TypeError` (it does
+`args.start_date + 7*24*60*60` on a string). Always pass both dates.
+
+#### Why the search criteria were wrong
+
+`interactive_search_vastai.py` filters on `inet_down >= 5000` Mb/s, which for a
+one-shot rental is backwards: the 34 GB of models is paid *per video*, so $/GB
+matters more than link speed, and every host passing that filter charged
+$2.60–$10.00/TB. Ranking the same GPUs by full one-shot cost instead
+(`scripts/search_cheap_egress.py`):
 
 | machine | $/hr | $/TB | down Mb/s | one-shot |
 |---|---|---|---|---|
@@ -307,9 +330,121 @@ A 4x slower link adds ~1 min of download, worth ~$0.015 of rental, while the
 cheaper egress saves ~$0.078. **Cheap egress beats a fast link**, and the
 ordering survives charging each host for its own download time.
 
-Caveat on the $0.236 vs $0.204 gap: the table prices 0.23 h of rental plus
-download, while this run actually billed 0.308 h — the 4-minute apt stall is in
-the real number and not in the model.
+#### …and then cheap egress overcorrected, and cost 14 minutes
+
+That model ranks on money. It picked machine `69187` (Hong Kong, $0.401/hr,
+$1.30/TB, advertised 1,311 Mb/s) at a modelled $0.160. The instance **sat in
+`loading` for 14 m 11 s, never reached ssh, and produced nothing.** It was still
+pulling the container image when it was destroyed.
+
+Three things were wrong, all now fixed in both search scripts:
+
+- **The container image was not in the model at all.**
+  `vastai/comfy:v0.28.0-cuda-12.9-py312` is **9.53 GB** compressed, pulled on
+  every fresh rental, *before* provisioning starts and before ssh answers. The
+  billed `bwd` on the e2e run was 34.4 GB — the models alone — so vast **does not
+  charge egress on the image pull**. It costs time but not money, which is
+  precisely why a $-ranked search was blind to it. Total pull is 43.5 GB, not 34.
+- **Advertised `inet_down` is a weak predictor.** 1,311 Mb/s puts 9.5 GB at under
+  a minute; it had not finished in fourteen. Machine `54134` at 1,699 Mb/s had
+  ssh up in 52 s. Both scripts now derate advertised speed to **35%** and enforce
+  a **2,500 Mb/s floor** — the floor exists to drop hosts that cannot serve a
+  fast pull, not to chase the fastest link on the market.
+- **Neither ranking priced the wait.** Both now add
+  `minutes x $0.02` (`TIME_VALUE_USD_PER_MIN` / `--time-value`) to the estimate,
+  so five cents buys about two and a half minutes. Ranking on $ alone picks hosts
+  that stall; ranking on time alone invites paying for a marginally faster link.
+  Hard ceilings (`--min-speed`, `--max-cost-per-tb`, `--max-cost`) sit on top so
+  speed cannot be bought at any price.
+
+`MIN_INET_DOWN_SPEED` in `interactive_search_vastai.py` went **5000 → 2500** in
+the same change: at 5,000 every surviving host charged $2.60–$10.00/TB, which is
+what started this whole detour.
+
+What the reworked ranking picks now — fast *and* cheap, rather than either:
+
+| machine | $/hr | $/TB | down | pull | one-shot | score |
+|---|---|---|---|---|---|---|
+| 99580 (UK) | 0.606 | **0.98** | 4,225 Mb/s | 3.9 min | $0.212 | **0.567** |
+| 141234 (CN) | 0.535 | 2.60 | 4,324 Mb/s | 3.8 min | $0.246 | 0.598 |
+| 45707 (Iceland) | 0.668 | 2.73 | 4,639 Mb/s | 3.6 min | $0.286 | 0.634 |
+
+### 2026-07-27 — torch.compile does not pay for itself on one video (measured)
+
+Every workflow in the repo wires `compile_args`, and the two variants named
+"nocomp" in the sweeps only switch `mode` to `default` — so nothing here had ever
+tested compiling against *not* compiling. Three arms, **one box** (`45971600`,
+Nebraska 5090), each rendering the full 58 s clip, `/tmp/torchinductor_root`
+wiped between arms:
+
+| arm | `mode` | render | inductor cache before → after |
+|---|---|---|---|
+| a_autotune | `max-autotune-no-cudagraphs` (ships today) | 591.8 s | 0 → 360 MiB |
+| b_default | `default` | 492.7 s ⚠️ | 360 → 370 MiB |
+| c_nocompile | `compile_args` removed | 579.5 s | 370 → 370 MiB |
+
+**`max-autotune-no-cudagraphs` is 12.3 s slower than not compiling at all.** That
+comparison is sound: arm A started from an empty cache and arm C compiles
+nothing, so both are honest cold numbers. Autotuning benchmarks kernel variants
+on the GPU at first call, and across 21 windows the winning kernels never earn
+back what the search cost. It pays from the *second* render onward, which a
+one-shot rental never reaches.
+
+**The 492.7 s for `mode=default` is not trustworthy** — my error, not the
+harness's. The first version of the script did not wipe the inductor cache
+between arms, on an unverified assumption that inductor keys entries by mode. It
+does not, or not enough: arm B started with arm A's 360 MiB already on disk, so
+"cold default" cannot be told apart from "warm autotune". The script now wipes
+the cache (`rm -rf /tmp/torchinductor_root`) and a single-arm rerun was launched
+to settle it, but was cancelled before it produced a number. **Treat 492.7 s as
+an upper bound on how good `default` can look, not as its cold cost.**
+
+What is safe to conclude today: **stop shipping `max-autotune` for one-shot
+rentals.** Whether `default` beats no-compile is open.
+
+The three arms cost $0.331 billed.
+
+### 2026-07-27 — output smoothness, and the one real defect
+
+The 58 s output felt like it was not playing smoothly. Four hypotheses, three
+dead:
+
+- **Duplicate frames?** No. Exact `framemd5` hashing gives **1521/1521 unique
+  frames, zero duplicates** — the container's 25 fps is the real rate. An earlier
+  `mpdecimate` pass claimed 191 duplicates and 21.9 effective fps; that was a
+  false positive. `mpdecimate` is tuned for cuts and letterboxing and collapses
+  frames where only a mouth moves against a still background, which is exactly
+  what this workload produces. Do not use it on talking heads. (And pass
+  `-map 0:v` to `framemd5`, or it hashes the audio stream too and reports 4141
+  "frames".)
+- **Judder at window seams?** No. Per-frame motion measured at strides 64/68/72/
+  76/81 shows a max ratio of 1.09 — the `motion_frame=9` overlap blends cleanly.
+- **Motion decaying over the clip?** No clear trend. Per-decile means run
+  0.88 / 0.81 / 0.78 / 0.73 / 0.79 / 0.71 / 0.69 / 0.86 / 0.76 / 0.55 — noisy,
+  not monotonic.
+- **4-step being choppier than 6-step?** The opposite. Jerk-over-motion is
+  **0.180 for 4-step against 0.199 for 6-step** — the distilled model is
+  *smoother*.
+
+**The defect is a dead tail.** The video runs **60.84 s against 58.20 s of
+audio** — 1521 frames generated where the speech needs 1455. The extra **2.64 s**
+is the character idling after the voice stops, and motion there averages 0.30
+against 0.78 for the body of the clip. It reads as the video hanging.
+
+Cause: `VHS_VideoCombine.trim_to_audio` was `false`, so the node kept every frame
+the sampler produced instead of cutting to the audio. InfiniteTalk works in
+81-frame windows, so it always rounds *up* past the end of the audio — the
+overhang is structural, not a one-off.
+
+**Fixed:** `trim_to_audio: true` in the shipped workflows
+(`IT_{4090,5090}_july2026_{4,5}step.json` and
+`workflows/generated/full/full58_sage_API.json`), via
+`scripts/set_trim_to_audio.py`. The archived sweep and `compile_ab` workflows are
+deliberately left alone — they document runs that actually happened, and
+rewriting them would misrepresent those runs. This has not been re-rendered yet,
+so the fix is verified in the JSON, not in an output file.
+
+Measurement scripts: `scripts/check_smoothness.py`, `scripts/quality_metrics.py`.
 
 ### Disk sizing
 
