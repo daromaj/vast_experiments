@@ -151,6 +151,10 @@ seed: **SSIM 0.973** — quantized attention does change the output slightly, ju
 not visibly. Details, caveats and the metrics that do *not* mean what they look
 like: `july_test.md`. Frame strips in `notes/quality/`.
 
+(`notes/` holds run artifacts — contact sheets, per-run JSON, VRAM traces. It is
+gitignored and kept local, so paths under it referenced here and in `july_test.md`
+exist in a working copy that has done the runs, not in a fresh clone.)
+
 720p (1280x720) does fit on a 5090 at `blocks_to_swap=0` — 27.8 GiB peak with
 `tiled_vae=true` — but costs ~4.4x wall-clock, and there is no 720p lightx2v
 distill LoRA published (only 480p ranks exist), so the 4-step LoRA is a mismatch

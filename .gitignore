@@ -21,3 +21,6 @@ provisioning-*.log
 
 # Vendored node source, cloned for reference only (see vendor/README)
 vendor/
+
+# Measurement notes and run artifacts - kept local, deliberately not published.
+notes/
