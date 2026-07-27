@@ -129,7 +129,10 @@ Conclusions:
   workaround; there is headroom without it. Turn it off.
 - **`max-autotune-no-cudagraphs` buys nothing** on sdpa: 141.2 s vs 141.4 s for
   plain `default`, while adding ~33 s to the first run. Net loss unless you
-  generate many clips per ComfyUI session.
+  generate many clips per ComfyUI session. (On *sage* it is a clear win, and it
+  pays back within a single 58 s clip — see the one-shot section below. The
+  ~33 s first-run figure is an 8 s-clip number and does not scale; measured on a
+  58 s clip the cold penalty is ~75 s.)
 - 4 steps + `flowmatch_distill` beats 5 steps by 45 s, as designed.
 
 The four shipped `IT_{4090,5090}_july2026_{4,5}step.json` workflows already
@@ -209,6 +212,91 @@ So the tuning rule is **not** "shed the minimum that avoids OOM" — that lands 
 This also explains the pre-fix figures in `README.md` (`swap 5 = 238 s` beating `swap 20 = 314 s`), which are the reverse ordering. Those were measured with the mis-built SageAttention wheel; correcting the wheel flips the result.
 
 Caveat on the peak column: it is *reserved*, read from `nvidia-smi`, not required. The caching allocator does not hand memory back, so a pinned variant reports the device limit whatever its true working set. It separates "had headroom" from "had none" and nothing finer — `torch.cuda.max_memory_allocated` inside the node would be needed for anything sharper.
+
+## One-shot rental — 2026-07-27, RTX 5090, vast.ai 45967149
+
+Every figure above is per-render on a box that was already provisioned and, from
+run 2 onward, already warm. That is the wrong measurement for the way this is
+actually used: rent a box, make one video, destroy it. Then provisioning and the
+cold inductor cache are paid **per video**, not amortized across a sweep.
+
+Measured end to end with `scripts/e2e_oneshot.sh`, which stamps each boundary as
+it happens (`notes/run_results/e2e_oneshot/phases.tsv`) rather than reconstructing
+it from logs afterwards:
+
+| Phase | Duration |
+|---|---|
+| create → ssh reachable | 0 m 49 s |
+| provisioning | 6 m 27 s |
+| upload workflow + assets | 0 m 04 s |
+| **render 58 s clip, cold cache** | **11 m 06 s** |
+| download outputs | 0 m 02 s |
+| destroy | 0 m 01 s |
+| **total billed** | **18 m 29 s** |
+
+Output verified: 60.84 s, 480x832, 1521 frames, audio track present, 8.6 MB.
+Peak VRAM 26,474 MiB — above the ~24.4 GiB seen in the sweep because R6
+(`WANOPT_KEEP_CACHE_WARM=1`) skips the per-window cache purge, so the allocator
+keeps more. Still comfortable on 32 GB.
+
+**Only 60% of the wall clock is generation.** The remaining 7 m 20 s is boot and
+provisioning.
+
+### The cold-compile penalty is ~75 s, not ~33 s
+
+The render took 664.8 s against 589.9 s for the same workflow on a warm inductor
+cache. The ~33 s cold/warm delta measured on an 8 s clip **does not carry over** —
+a longer clip exercises more graph variants, so more gets compiled. Do not
+extrapolate warmup cost from short clips.
+
+It still pays for itself on a single 58 s video: without `torch.compile` the loss
+is roughly 10 s per window across 21 windows, well over the 75 s it costs. The
+warmup that genuinely does *not* pay back one-shot remains **R2**, the VAE decoder
+compile, at 646.5 s — which is why `full58_sage_API.json` (the s5 lineage) is the
+right workflow for this mode and s8 is not.
+
+Provisioning was 5 m 59 s, of which **4 m 01 s was `apt install`** — host
+variance, not a regression. SageAttention cost 12 s: the cached `sm_120` wheel
+passed its probe and the source build was cancelled. The 34 GB of models pulled
+in 1 m 38 s on a 7,944 Mb/s link. Both WANOPT flags were set automatically, so
+this run had the s9 configuration.
+
+### Host selection for one-shot is not what the search optimizes
+
+This run cost **$0.148 rental + $0.088 egress ≈ $0.236**. Egress was **37% of the
+bill**.
+
+`interactive_search_vastai.py` filters on `inet_down >= 5000` Mb/s. For a sweep
+that is right — the download happens once and then you render all day. For
+one-shot it is backwards: the 34 GB is re-pulled for every video, so $/GB
+dominates, and every host clearing that speed filter charged $2.60–$10.00/TB.
+
+Ranking the same GPUs by full one-shot cost instead
+(`scripts/search_cheap_egress.py`, which charges each offer for its own download
+time so a slow link cannot look free):
+
+| machine | $/hr | $/TB | down Mb/s | one-shot |
+|---|---|---|---|---|
+| 32637 (Alberta) | 0.482 | **0.33** | 1,834 | **$0.142** |
+| 54134 (Nebraska) | 0.534 | **0.00** | 1,699 | $0.147 |
+| 108568 (Malaysia) | 0.401 | 1.30 | 1,377 | $0.159 |
+| 141151 (used here) | 0.481 | 2.60 | 7,944 | $0.204 |
+
+A 4x slower link adds ~1 min of download, worth ~$0.015 of rental; the cheaper
+egress saves ~$0.078. **Cheap egress beats a fast link at this transfer size.**
+
+Caveat on $0.236 actual versus $0.204 modelled: the table assumes 0.23 h of
+rental plus download time, while this run billed 0.308 h. The four-minute apt
+stall is in the real number and not in the model.
+
+### What this changes
+
+- For repeated work, keep the box and amortize: the second video costs 9 m 50 s
+  and no provisioning.
+- For genuinely one-shot work, pick the host by `search_cheap_egress.py`, not by
+  `$/hr` or link speed, and use the s5-lineage workflow so you skip R2's warmup.
+- Do not quote per-render times as if they were the cost of a video. On this
+  rental the render was 60% of the clock and 63% of the money.
 
 ## Reminder on the ceiling
 
