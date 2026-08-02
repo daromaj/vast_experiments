@@ -29,7 +29,30 @@ COMFYUI_DIR=${WORKSPACE}/ComfyUI
 TOTAL_BYTES_TO_DOWNLOAD=33978384650
 MIN_SETUP_TIME=360  # Minimum 6 minutes for nodes + SageAttention build
 
-APT_PACKAGES=(aria2 bc libcusparse-dev-12-9 libcublas-dev-12-9 libcusolver-dev-12-9 libcufft-dev-12-9 libcurand-dev-12-9)
+# Two lists, because they are paid for at very different times.
+#
+# APT_PACKAGES is installed synchronously, before anything else starts. Keep it
+# to what provisioning itself needs to run: aria2c for downloads, bc for the
+# progress arithmetic. ~2 MB.
+#
+# APT_BUILD_PACKAGES is the CUDA toolchain, and it is installed lazily inside
+# provisioning_build_sageattention. Measured 2026-08-02: these five pull 2.1 GB
+# from NVIDIA's apt repo at 21.5 MB/s (1m37s-3m19s), against HuggingFace at
+# 341 MB/s on the same host - 16x slower, and it was blocking every rental.
+#
+# They buy nothing on the common path. readelf -d on all three compiled
+# extensions in the cached wheel (_fused, _qattn_sm80, _qattn_sm89) shows
+# NEEDED = libc10 / libtorch_cpu / libtorch_python / libcudart.so.12 / libstdc++
+# / libgcc_s / libc, and nothing else; zero dlopen/dlsym imports and zero
+# strings matching cublas|cufft|cusolver|cusparse|curand. libcudart is supplied
+# by the cuda-12.9 base image and torch's bundled nvidia-*-cu12 wheels. So an
+# install-from-wheel - which is what happens whenever the probe passes, i.e.
+# almost always - never touches any of this.
+#
+# The source build genuinely does need the headers (commit 3856fc7 added them
+# for exactly that reason), so they move into the build rather than disappear.
+APT_PACKAGES=(aria2 bc)
+APT_BUILD_PACKAGES=(libcusparse-dev-12-9 libcublas-dev-12-9 libcusolver-dev-12-9 libcufft-dev-12-9 libcurand-dev-12-9)
 PIP_PACKAGES=(
     # hf_transfer (Rust multi-threaded downloader) + the `hf` CLI for HuggingFace pulls.
     "huggingface_hub[hf_transfer]"
@@ -186,8 +209,8 @@ function provisioning_start() {
     fi
 
     provisioning_print_header
-    phase "apt install start"
-    provisioning_get_apt_packages
+    phase "apt install start (aria2/bc only — CUDA toolchain deferred to the sage build)"
+    provisioning_get_apt_packages "${APT_PACKAGES[@]}"
     phase "apt done, pip base start"
     provisioning_get_pip_packages
     phase "pip base done"
@@ -427,11 +450,13 @@ function provisioning_monitor_loop() {
 }
 
 function provisioning_get_apt_packages() {
-    if [[ -n $APT_PACKAGES ]]; then
-        # Use APT_INSTALL if defined, otherwise fallback to apt-get
-        local apt_cmd="${APT_INSTALL:-apt-get install -y}"
-        sudo $apt_cmd ${APT_PACKAGES[@]}
-    fi
+    # Packages come in as arguments so the CUDA toolchain can be installed from
+    # inside the SageAttention build instead of on the blocking path.
+    local pkgs=("$@")
+    [[ ${#pkgs[@]} -eq 0 ]] && return 0
+    # Use APT_INSTALL if defined, otherwise fallback to apt-get
+    local apt_cmd="${APT_INSTALL:-apt-get install -y}"
+    sudo $apt_cmd "${pkgs[@]}"
 }
 
 function provisioning_get_pip_packages() {
@@ -459,7 +484,26 @@ function provisioning_build_sageattention() {
     local start_time=$(date +%s)
     # Builds SageAttention from source with parallel compilation
     echo "Building SageAttention from source..."
-    
+
+    # nvcc needs the CUDA -dev headers, and only nvcc does. Installing them here
+    # rather than on the blocking path takes 2.1 GB of 21.5 MB/s apt traffic off
+    # the critical timeline of every rental whose cached wheel works.
+    #
+    # This function runs in the background and is killed when the wheel probe
+    # passes. A killed subshell does not take its `sudo apt-get` child with it,
+    # which is deliberate: interrupting dpkg mid-transaction is the one way this
+    # could actually break a box, and an orphan finishing quietly at 21.5 MB/s
+    # cannot meaningfully starve a 341 MB/s HuggingFace pull.
+    echo "Installing CUDA dev headers for the source build (~2.1 GB)..."
+    local apt_t0=$(date +%s)
+    if provisioning_get_apt_packages "${APT_BUILD_PACKAGES[@]}"; then
+        echo "CUDA dev headers installed in $(( $(date +%s) - apt_t0 ))s"
+    else
+        # Not fatal here: say so plainly and let nvcc produce the real error.
+        echo "WARNING: CUDA dev headers failed to install — the build below will"
+        echo "WARNING: almost certainly fail. Only matters if the wheel probe also fails."
+    fi
+
     local sage_dir="${WORKSPACE}/SageAttention"
     
     # Clone the repository if not already present
