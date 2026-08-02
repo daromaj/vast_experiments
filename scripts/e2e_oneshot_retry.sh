@@ -21,7 +21,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 ATTEMPTS="${ATTEMPTS:-3}"
-SKIP=""
+# Seeded from the environment, NOT reset. A caller who already knows a host is
+# broken must be able to say so - hardcoding "" here silently discarded that and
+# sent the first attempt straight back to the host we were trying to avoid.
+SKIP="${SKIP:-}"
 RUN_ROOT="${RUN_ROOT:-$REPO/output}"
 
 say() { echo "[retry $(date -u +%H:%M:%S)] $*"; }

@@ -159,40 +159,19 @@ trap cleanup_destroy EXIT
 # A broken or rate-limited registry mirror on the host, not a stale pin - which
 # is exactly the distinction this has to surface, because bumping the image tag
 # invalidates the cached SageAttention wheel and would have been the wrong fix.
-instance_fault() {
-    vastai show instance "$INSTANCE" --raw 2>/dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)                     # API hiccup is not evidence of a fault
-if isinstance(d, list):
-    if not d:
-        sys.exit(0)                 # nor is an empty list
-    d = d[0]
-if not isinstance(d, dict):
-    sys.exit(0)
-msg = (d.get("status_msg") or "").strip()
-status = (d.get("actual_status") or "").lower()
-# Substrings, not exact matches: vast passes the docker daemon message through
-# verbatim and it varies by registry, host and failure mode.
 #
-# Deliberately NOT here: a bare "not found". It is redundant - the real failure
-# already matches "failed to resolve reference" and "error response from
-# daemon" - and it is broad enough to fire on some benign message that happens
-# to contain it. This decides whether to throw away a paid rental, so a false
-# positive costs more than a slow true one.
-FATAL = (
-    "failed to resolve reference", "manifest unknown",
-    "pull access denied", "error response from daemon", "toomanyrequests",
-    "no space left", "no such host", "unauthorized", "invalid reference",
-)
-low = msg.lower()
-if any(f in low for f in FATAL):
-    print(f"{status or 'unknown'}: {msg[:200]}")
-elif status in ("exited", "offline"):
-    print(f"{status}: {msg[:200] or 'instance stopped before ssh came up'}")
-'
+# The classifier itself is scripts/instance_fault.py, NOT an inline heredoc.
+# It was inline once; the Python contained single-quoted strings, which closed
+# the shell's own single-quoted argument early, and python3 answered SyntaxError
+# on every poll for a whole rental without anyone noticing. Keep it in a file.
+#
+# The raw payload is teed to the run dir and probe errors are kept, so that a
+# host which fails in a way this does NOT recognise is still diagnosable after
+# the instance is destroyed. That is the expensive part to lose.
+instance_fault() {
+    vastai show instance "$INSTANCE" --raw 2>/dev/null \
+        | tee "$RUN_DIR/instance_status.json" \
+        | python3 "$REPO/scripts/instance_fault.py" 2>>"$RUN_DIR/fault_probe.err"
 }
 
 say "waiting for ssh"
@@ -221,7 +200,18 @@ for i in $(seq 1 120); do
     fi
     sleep 10
 done
-[[ -z "$SSH_HOST" ]] && { say "ssh never came up"; exit 1; }
+if [[ -z "$SSH_HOST" ]]; then
+    say "ssh never came up"
+    # Say WHY, as far as vast will admit to. Without this the instance is
+    # destroyed and the only record of a 20-minute failure is "ssh never came
+    # up", which is a symptom and not a cause.
+    say "last known status: $(python3 "$REPO/scripts/instance_fault.py" \
+        --describe < "$RUN_DIR/instance_status.json" 2>/dev/null \
+        || echo 'no status captured')"
+    [[ -s "$RUN_DIR/fault_probe.err" ]] && \
+        say "fault probe errored: $(head -c 200 "$RUN_DIR/fault_probe.err")"
+    exit 1
+fi
 stamp ssh_up
 say "ssh root@${SSH_HOST}:${SSH_PORT}"
 
