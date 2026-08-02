@@ -351,9 +351,11 @@ Three things were wrong, all now fixed in both search scripts:
   precisely why a $-ranked search was blind to it. Total pull is 43.5 GB, not 34.
 - **Advertised `inet_down` is a weak predictor.** 1,311 Mb/s puts 9.5 GB at under
   a minute; it had not finished in fourteen. Machine `54134` at 1,699 Mb/s had
-  ssh up in 52 s. Both scripts now derate advertised speed to **35%** and enforce
-  a **2,500 Mb/s floor** — the floor exists to drop hosts that cannot serve a
-  fast pull, not to chase the fastest link on the market.
+  ssh up in 52 s. Both scripts derate advertised speed and enforce a floor — the
+  floor exists to drop hosts that cannot serve a fast pull, not to chase the
+  fastest link on the market. (The derate was 35% and the floor 2,500 Mb/s when
+  this was written; both were recalibrated on 2026-08-02 to 90% and 1,500 Mb/s
+  after the measurement behind them turned out to be wrong — see below.)
 - **Neither ranking priced the wait.** Both now add
   `minutes x $0.02` (`TIME_VALUE_USD_PER_MIN` / `--time-value`) to the estimate,
   so five cents buys about two and a half minutes. Ranking on $ alone picks hosts
@@ -438,6 +440,96 @@ one was visible.)
 `mode: default`.
 
 $0.38 for all three arms, 34.5 min create→destroyed.
+
+### 2026-08-02 — the shipped config, rendered end to end
+
+One video with everything applied — `mode: default`, deferred CUDA toolchain,
+the fixed host ranking — on machine `104900` (Massachusetts, $0.499/hr,
+**$0.00/TB egress**, advertised 9,135 Mb/s), instance `46608622`:
+
+| phase | duration |
+|---|---|
+| create → ssh reachable | 1m 36s |
+| provisioning (models, nodes, sage) | 5m 36s |
+| upload workflow + assets | 0m 16s |
+| render 58 s clip, cold cache | 8m 31s |
+| download outputs | 0m 09s |
+| destroy | 0m 01s |
+| **total billed wall clock** | **16m 09s** |
+
+Output: 1454 frames, 58.200998 s, 480×832, peak VRAM 25,224 MiB — frame count
+and duration identical to all three A/B arms. Render 507.7 s against the A/B's
+480.4 s for the same config, +5.7% on a different box.
+
+#### Four hosts in a row could not pull the container image
+
+Hong Kong, California and Virginia ×2 all failed, two with
+`failed to resolve reference ... not found` and one with
+`Get "https://registry-1.docker.io/v2/": net/http: request canceled`. **The tag
+was fine** — a fresh token against `registry-1.docker.io` returned HTTP 200 for
+`v0.28.0`, `v0.29.0` and `v0.29.2`. So bumping the image would not have helped
+and would have thrown away the cached SageAttention wheel. The 200s came from a
+residential IP and prove nothing about what a datacenter host can reach; the
+remaining explanation is a pull path shared by vast hosts, not a stale pin.
+
+Each bad host was abandoned in **~90 s** instead of waiting out the 20-minute
+ssh timeout, at a cost of about $0.009 apiece.
+
+#### The fault detector had never worked
+
+`instance_fault()` was a `python3 -c '...'` heredoc, and the Python inside it
+contained single-quoted strings (`'unknown'`). Those quotes closed the *shell's*
+quoted argument, so the interpreter received truncated source and answered
+``SyntaxError: '{' was never closed`` on every poll. Machine `140178` burned a
+22-minute rental doing exactly this, ~$0.12, and still fell through to the
+timeout the detector exists to prevent.
+
+`test_instance_fault.py` reported PASS throughout. It regex-extracted the Python
+and ran it through `subprocess` with no shell involved — grading source text that
+production never executed. That is worse than having no test: it converts
+"untested" into "verified".
+
+The classifier now lives in `scripts/instance_fault.py`, where there is no
+quoting surface, and the test runs **bash** over the real function text with
+`vastai` stubbed on `PATH`. Pointed at the previous revision via `E2E_SCRIPT` it
+fails 17/17 with the production `SyntaxError`.
+
+### 2026-08-02 — correction: the bandwidth calibration measured the wrong interval
+
+Achieved throughput was computed from the *absolute* offset of the `[PHASE]
+downloads finished` line, as though downloads began at t=0. They begin when apt
+finishes. Under the old provisioning script the blocking 2 GB CUDA install ran
+first, so the 7,944 Mb/s run was charged 3m32s of apt against its model pull —
+340 s instead of the real 98 s — and reported 799 Mb/s for a host that actually
+delivered 2,774. Every constant in the cost model was fitted to those numbers.
+
+Corrected, measuring `downloads starting` → `downloads finished`, n=6
+(regenerate with `scripts/calibrate_bandwidth.py`):
+
+| advertised | window | achieved | % of advertised |
+|---|---|---|---|
+| 1,699 Mb/s | 166 s | 1,638 Mb/s | 96.4% |
+| 7,318 Mb/s | 86 s | **3,161 Mb/s** | 43.2% |
+| 7,398 Mb/s | 205 s | 1,408 Mb/s | 19.0% |
+| 7,944 Mb/s | 98 s | 2,774 Mb/s | 34.9% |
+| 8,021 Mb/s | 159 s | 1,710 Mb/s | 21.3% |
+| 9,135 Mb/s | 261 s | **1,106 Mb/s** | 12.1% |
+
+Among hosts advertising ≥3,000 Mb/s, achieved throughput spans 1,106–3,161 Mb/s
+— a 2.9× spread — and **does not track the advertised figure at all**. The
+9,135 Mb/s host was the slowest of the six; the 7,318 Mb/s host was the fastest.
+The old claim "a 1,699 Mb/s host beat a 7,944 Mb/s one" is false on the
+corrected numbers: 1,638 versus 2,774.
+
+The policy conclusion survives and is better supported than before — above the
+floor, advertised `inet_down` is noise, so **rank on price**. `test_host_ranking`
+still passes unchanged, because price dominates the score.
+
+`PIPELINE_CEILING_MBPS` (1300) became `OBSERVED_MEDIAN_SHARE_MBPS` (1700). The
+old name asserted a mechanism that does not exist: it assumed a limit in the
+download pipeline, when the cause is contention on the machine's shared uplink.
+With a 2.9× spread it predicts no individual host well; it is kept only because
+ranking needs a number in the formula.
 
 ### 2026-07-27 — output smoothness, and the one real defect
 

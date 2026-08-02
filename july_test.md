@@ -497,9 +497,11 @@ Three defects, all now fixed in `search_cheap_egress.py` *and*
   search could not see a 14-minute stall. Real pull is 43.5 GB, not 34.
 - **Advertised `inet_down` predicts little.** 1,311 Mb/s puts 9.5 GB under a
   minute; fourteen minutes was not enough. Machine `54134` at 1,699 Mb/s had ssh
-  up in 52 s. Both scripts now derate advertised speed to **35%** and enforce a
-  **2,500 Mb/s floor** — to exclude hosts that cannot serve a fast pull, not to
-  chase the fastest link.
+  up in 52 s. Both scripts derate advertised speed and enforce a floor — to
+  exclude hosts that cannot serve a fast pull, not to chase the fastest link.
+  (35% and 2,500 Mb/s when written; recalibrated 2026-08-02 to 90% and
+  1,500 Mb/s once the measurement behind them was found to be wrong — see the
+  correction in `README.md` and `scripts/calibrate_bandwidth.py`.)
 - **Neither ranking priced waiting.** Both now add `minutes x $0.02` to the
   estimate (`TIME_VALUE_USD_PER_MIN`, `--time-value`), so five cents buys about
   two and a half minutes. Hard ceilings (`--min-speed`, `--max-cost-per-tb`,
