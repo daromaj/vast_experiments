@@ -482,6 +482,127 @@ What the reworked ranking picks — fast *and* cheap:
 - Rank hosts on money *and* time. Either one alone picks badly, in opposite
   directions.
 
+## January 2026 vs now — the comparison that had never been run
+
+Every quality figure above compares *settings* measured on one box with one
+version of the nodes. What the January stack actually produced had never been
+checked. Run 2026-08-02, two RTX 5090 rentals in parallel, one full 58 s clip
+each, same image, same audio, same seed, same prompts.
+
+**Reproducing January is not a settings change.** The January workflow does not
+load against the current wrapper: node 137's class
+`DownloadAndLoadWav2VecModel` was later deleted in favour of
+`Wav2VecModelLoader`. Arm A therefore pins `ComfyUI-WanVideoWrapper` back to
+`339e0fe` (2026-01-23), which also reverts the WANOPT patch, so R3/R6 are absent
+from that arm. The pinned wrapper **imported cleanly against ComfyUI v0.28.0
+with no dependency work** — the six-month-old-node risk did not materialise, and
+at `339e0fe` *both* wav2vec classes exist, so the later change was a deletion,
+not a rename.
+
+Built by `scripts/build_quality_ab.py`, which reads the January workflow from
+git at `e906720` so it cannot drift and asserts its sampler settings survived
+the four edits it makes (inputs repointed, MelBand removed to match the current
+arm, `trim_to_audio` on so both clips share a frame index, filename prefix).
+Diffing the built arms leaves 7 differing inputs.
+
+| | A january | B current |
+|---|---|---|
+| steps / scheduler | 6 / `dpm++_sde` | 4 / `flowmatch_distill` |
+| quantization | `disabled` | `fp8_e4m3fn_fast` |
+| merge_loras | false | true |
+| compile mode | `default` | `max-autotune-no-cudagraphs` |
+| wav2vec | `TencentGameMate/…-base` fp32, HF | local fp16 safetensors |
+| **render (58 s clip, cold)** | **921.9 s** | **591.7 s** |
+
+**1.56x faster.** Different hosts, so not a clean speed number — but their GPUs
+are within 2% on dlperf and neither swaps blocks, and the like-for-like figures
+are already above.
+
+Both outputs: 480x832, 25 fps, **1454 frames, 58.200998 s**, and **1454/1454
+unique frames by `framemd5`** on each. This is also the first render carrying
+the `trim_to_audio` fix, which until now was verified in JSON only — the 2.64 s
+dead tail is gone, confirmed in an output file.
+
+### Quality: sharpness is a wash, motion is not
+
+| | january 6-step | current 4-step | |
+|---|---|---|---|
+| edge energy | 35.83 | 35.22 | -1.7% |
+| whole-frame motion | 1.0416 | 0.7799 | **-25%** |
+| whole-frame jerk/motion | 0.2020 | 0.2325 | +15% |
+
+Matched frames at 1/5/15/30/45/57 s show identical composition, lighting, face
+identity and beard detail, with no drift or degradation late in the clip.
+Sharpness is down 1.7% — larger than the 0.5% measured on 8 s clips, still
+small. **Lip-sync was judged good in both** by eye; there is still no metric for
+it in this repo, and the 6→4 step cut is exactly what could hurt it, so that
+remains a human check.
+
+**The 25% motion gap is the real result, and reading it as "the current stack is
+deader" is wrong.** Split by region (`scripts/motion_regions.py`, boxes placed
+against a `drawgrid` overlay, not guessed):
+
+| region | january | current | |
+|---|---|---|---|
+| wall_upper | 0.105 | 0.123 | noise floor |
+| wall_left_strip | 0.192 | 0.162 | noise floor |
+| tree_only | 0.237 | 0.288 | noise floor |
+| desk_carving | 0.153 | 0.189 | noise floor |
+| **mug** | **0.612** | **0.444** | static prop, 1.38x |
+| **chair_post_L** | **0.610** | **0.340** | static prop, **1.79x** |
+| **chair_post_R** | **1.100** | **0.724** | static prop, **1.52x** |
+| face_mouth | 5.686 | 4.473 | subject, 1.27x |
+| hand_L | 0.919 | 0.468 | subject, 1.96x |
+| hand_R | 1.794 | 1.079 | subject, 1.66x |
+
+Far scenery is at the same noise floor in both — **neither arm drifts its
+background.** But the chair posts and the mug are static props sitting clear of
+the subject, and they move in both arms at 2-6x the wall's noise floor, with
+January moving them **1.4-1.8x more than the current stack**. Chairs do not
+move. That share of January's higher motion score is a defect, not liveliness,
+and it is visible: the chair reads as wobbly.
+
+So the whole-frame motion mean, and the jerk/motion ratio built on it, **cannot
+be used to compare these two arms** — the denominator is inflated by prop
+instability. That also disarms the apparent contradiction with the
+jerk-over-motion figure recorded earlier in this file (0.180 for 4-step against
+0.199 for 6-step): the whole-frame version of the number does not measure what
+it appears to on a clip whose scenery is unstable. Neither reading should be
+quoted; use the regions.
+
+The remaining subject-motion gap is smaller hand movement, which on a talking
+head is a reasonable trade — less amplitude is less opportunity for an
+unnatural gesture.
+
+**Verdict: the current stack is the better render, not merely the faster one.**
+1.56x faster, sharpness within 1.7%, lip-sync intact, and measurably steadier
+props.
+
+**What this does not resolve:** four things differ at once — step count plus
+scheduler, `fp8_e4m3fn_fast`, merged LoRA, and the wav2vec model. That last is a
+live suspect for the motion difference specifically, since audio embeddings are
+what InfiniteTalk animates from, and the two arms feed it fp32-from-HF against
+local fp16. Isolating it needs one run with only that node swapped.
+
+Harness: `scripts/quality_ab_jan_vs_now.sh`, arms from
+`scripts/build_quality_ab.py`, metrics from `quality_metrics.py`,
+`motion_profile.py`, `motion_regions.py`, `check_smoothness.py`. Outputs and a
+labelled side-by-side in `output/jan_vs_now_20260802T100727Z/` (gitignored).
+~$0.64 across three rentals, one of which was wasted: the node pin hardcoded
+`custom_nodes/ComfyUI-WanVideoWrapper` when `povision_fp8.sh` clones from a
+`.git` URL and the directory is `ComfyUI-WanVideoWrapper.git`. That arm aborted
+6 s after ComfyUI came up, having pulled all 32 GB of models first.
+
+### Two harness traps this run exposed
+
+- **`e2e_oneshot.sh` resolved its instance by "highest id we own".** Two arms in
+  parallel would each claim whichever instance appeared last, a coin flip over
+  whose box is whose. It now snapshots the instance list, creates under a
+  `flock`, and takes the set difference.
+- **`mpdecimate` again.** `check_smoothness.py` reported 52 and 146 "duplicate
+  frames" for the two clips; `framemd5` says 1454/1454 unique on both. The
+  earlier warning in this file stands — do not read that field on talking heads.
+
 ## Reminder on the ceiling
 
 None of these reach the API provider's ~6–7 min. That's near-certainly multi-GPU Ulysses sequence parallelism (officially supported: `torchrun --ulysses_size=N --dit_fsdp`), which the single-GPU kijai wrapper can't do. To actually match the API you'd leave ComfyUI and run `generate_infinitetalk.py` under torchrun on a multi-GPU box. Separate experiment.

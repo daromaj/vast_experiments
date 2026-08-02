@@ -450,6 +450,55 @@ so the fix is verified in the JSON, not in an output file.
 
 Measurement scripts: `scripts/check_smoothness.py`, `scripts/quality_metrics.py`.
 
+### 2026-08-02 — January 2026 vs the current stack, measured head to head
+
+Everything above compares *settings*. This compares what the January stack
+actually produced against what ships now: two 5090 rentals in parallel, one full
+58 s clip each, same image, audio, seed and prompts.
+
+Reproducing January needed a **node pin**, not just old settings — the January
+workflow will not load against the current wrapper, because node 137's class
+`DownloadAndLoadWav2VecModel` was later deleted in favour of
+`Wav2VecModelLoader`. Pinned to `339e0fe` (2026-01-23) it **imported cleanly
+against ComfyUI v0.28.0** with no dependency work.
+
+| | A january (6-step `dpm++_sde`) | B current (4-step distill) |
+|---|---|---|
+| render, 58 s clip, cold | 921.9 s | **591.7 s** |
+| edge energy (sharpness) | 35.83 | 35.22 (-1.7%) |
+| unique frames (`framemd5`) | 1454/1454 | 1454/1454 |
+
+**1.56x faster** — different hosts, so not a clean speed figure, but their GPUs
+are within 2% on dlperf and neither swaps blocks.
+
+Also the first render carrying the `trim_to_audio` fix, which was previously
+verified in JSON only: both clips run **58.200998 s against 58.20 s of audio**.
+The 2.64 s dead tail is gone, confirmed in an output rather than a config.
+
+**The interesting result is motion, and the whole-frame number lies about it.**
+The current clip shows 25% less frame-to-frame change, which read alone suggests
+a deader render. Split by region it does not:
+
+| | january | current | |
+|---|---|---|---|
+| wall / tree / desk | 0.11-0.24 | 0.12-0.29 | noise floor, both |
+| **chair posts, mug** | **0.61-1.10** | **0.34-0.72** | static props, **1.4-1.8x more in January** |
+| face, hands | 0.92-5.69 | 0.47-4.47 | subject |
+
+Neither arm drifts its background. But the chair posts and mug are static props
+sitting clear of the subject, and January moves them 1.4-1.8x more — the chair
+visibly wobbles. That portion of its higher motion score is a **defect, not
+liveliness**, which means the whole-frame motion mean and the jerk/motion ratio
+built on it cannot compare these two arms at all. The rest of the gap is smaller
+hand movement, a reasonable trade on a talking head.
+
+Lip-sync judged good in both by eye; there is still no metric for it here.
+
+**Verdict: the current stack is the better render, not merely the faster one.**
+Method, the full region table, the confound that remains unresolved (the two
+arms feed different wav2vec weights), and two harness traps this run exposed:
+`july_test.md`.
+
 ### Disk sizing
 
 Measured on a live 5090 rental after a full provision + several renders:
