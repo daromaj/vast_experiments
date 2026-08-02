@@ -20,16 +20,24 @@ recorded in create.log:
     1699 Mb/s    3m18s (198 s)        1371 Mb/s    80.7%
     7944 Mb/s    5m40s (340 s)         799 Mb/s    10.1%
 
-The 1699 Mb/s host finished FASTER than the 7944 Mb/s one. Achieved throughput
-sits in a band around 800-1400 Mb/s whatever the link claims, so the model is a
-derate with a hard ceiling rather than a plain percentage:
+The 1699 Mb/s host finished FASTER than the 7944 Mb/s one.
+
+The mechanism is contention, not a pipeline limit. inet_down is the MACHINE's
+uplink and every instance on it shares that link, so a rental receives roughly
+link/tenants. The headline numbers belong to multi-GPU rigs with several renters
+behind one fat pipe, which is why a 7398 delivers a fraction of itself, while a
+modest host that is small or single-tenant hands over most of what it claims.
+This also explains the 799 Mb/s run, which came in BELOW the band - a fixed
+ceiling cannot account for that, contention can.
 
     achieved = min(advertised x LINK_DERATE, PIPELINE_CEILING)
 
-n=3. Treat the ceiling as the shape of the thing, not a precise constant - the
-7944 Mb/s run came in well under it and nothing in the log explains why. The
-conclusion that survives regardless: past ~1700 Mb/s advertised, extra speed is
-not what you are buying.
+So PIPELINE_CEILING is an observed MEDIAN SHARE, not a physical cap: an idle
+host can exceed it and a busy one can fall far short. Modelling it as a cap is
+the conservative choice for ranking - it stops us paying for advertised
+bandwidth we will not receive - but it should not be read as a guarantee, and
+n=3 is a real caveat. The conclusion that survives regardless: past ~1700 Mb/s
+advertised, extra speed is not what you are buying.
 """
 import argparse
 import json

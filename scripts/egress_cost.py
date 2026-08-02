@@ -69,7 +69,12 @@ STORAGE_USD = 0.017
 # slowness instead of being handed the fast host's timeline. Comparing hosts on
 # a fixed 0.40h is exactly the error that makes cheap bandwidth look free.
 OCCUPANCY_EX_PULL_H = 0.23
-SPEED_DERATE = 0.35         # advertised inet_down is a weak predictor; derate hard
+# Same model as provision_table.py / the two searches: a derate AND a ceiling.
+# inet_down is the machine's uplink shared across its tenants, so a rental gets
+# roughly link/tenants - which is why the headline number on a busy multi-GPU
+# rig buys a fraction of itself. See provision_table.py for the calibration.
+SPEED_DERATE = 0.80
+PIPELINE_CEILING_MBPS = 1300
 
 TIERS = [0.0, 0.004, 1.0, 2.667, 4.0, 10.0]
 
@@ -143,7 +148,8 @@ def main():
     for o in offers:
         tb = (o.get("inet_down_cost") or 0.0) * GIB
         dph = o.get("dph_total") or 0.0
-        spd = (o.get("inet_down") or 0.0) * SPEED_DERATE
+        spd = min((o.get("inet_down") or 0.0) * SPEED_DERATE,
+                  PIPELINE_CEILING_MBPS)
         # Both pulls burn rental: the image first, then the models.
         pull_gb = (BILLED_GIB + IMAGE_GIB) * GIB**3 / 1000**3  # GiB -> gigabit basis
         dl_min = (pull_gb * 8 * 1000 / spd / 60) if spd else 999.0

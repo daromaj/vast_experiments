@@ -42,7 +42,43 @@ IMAGE_GB = 9.5
 # Machine 54134 at 1699 Mb/s had ssh up in 52 s. Advertised speed is a weak
 # predictor, so derate it hard and keep a floor under --min-speed rather than
 # trusting the number.
-SPEED_DERATE = 0.35
+# 0.35 -> 0.80. The old value was not calibrated against anything: it was a
+# reaction to machine 69187 stalling, applied to every host. Measured, a host
+# at or below the pipeline ceiling achieves ~80% of its advertised rate
+# (1699 Mb/s -> 1371 Mb/s = 80.7%). Keeping 0.35 while adding the ceiling below
+# would be worse than either alone - the cap would bind only for fast hosts,
+# leaving the model still claiming a 7398 Mb/s box beats a 1678 Mb/s one by 2x.
+SPEED_DERATE = 0.80
+# A derate alone still says a 7398 Mb/s host pulls 4x faster than a 1700 Mb/s
+# one. Measured across three runs ([PHASE] "downloads finished" vs the
+# advertised inet_down in create.log), it does not:
+#
+#     7398 Mb/s -> 3m29s -> 1299 Mb/s achieved (17.6% of advertised)
+#     1699 Mb/s -> 3m18s -> 1371 Mb/s achieved (80.7%)
+#     7944 Mb/s -> 5m40s ->  799 Mb/s achieved (10.1%)
+#
+# The 1699 Mb/s host finished FASTER than the 7944 Mb/s one.
+#
+# WHY: inet_down is the MACHINE's uplink, and it is shared by every instance on
+# that machine. What a rental gets is roughly link/tenants, not link. The big
+# advertised numbers belong to multi-GPU rigs with several renters on one fat
+# pipe, so a headline 7398 buys a fraction of itself; a modest 1699 Mb/s host is
+# likelier to be small or single-tenant and hand over most of what it claims.
+# That is the better reading of the table above than any fixed pipeline cap:
+# a cap cannot explain the 799 Mb/s run, which came in BELOW the band, but
+# contention explains it immediately.
+#
+# So this constant is an observed MEDIAN SHARE under contention, not a physical
+# ceiling. Nothing stops an uncontended host beating it or a busy one falling
+# far short - which is also why a --min-speed floor still earns its place as
+# insurance, and why n=3 is a real caveat rather than a formality.
+#
+# Capping at it is nonetheless the right conservative move for RANKING: without
+# it the score pays --time-value for minutes that never get saved, and reliably
+# outbids a cheap host for an expensive fast one. That is exactly how the
+# 2026-08-02 run rented a $0.481/hr 7398 Mb/s box at $2.667/TB when a $0.334/hr
+# 1678 Mb/s box at $0.000/TB was available and provisioned in the same time.
+PIPELINE_CEILING_MBPS = 1300
 # Rental time for one 58 s video end to end EXCLUDING every download: boot, the
 # rest of provisioning, a cold-cache render, output upload, teardown. Download
 # time is added per offer from its link speed. Folding it into a single constant
@@ -104,11 +140,18 @@ def main():
     # lets the score prefer cheap egress instead of the filter mandating it.
     ap.add_argument("--max-cost-per-tb", type=float, default=3.0,
                     help="egress ceiling in $/TB (vast reports $/GB)")
-    # Was 1000. A 1311 Mb/s host failed to pull the image in 14 minutes, so the
-    # floor exists to keep hosts that cannot serve a fast pull out of the
-    # ranking entirely rather than letting cheap egress buy them a top slot.
-    ap.add_argument("--min-speed", type=float, default=2500,
-                    help="Mb/s floor; below ~2500 the image pull dominates")
+    # 1000 -> 2500 -> 1500. A 1311 Mb/s host failed to pull the image in 14
+    # minutes, so a floor has to exist. But 2500 was set before the ceiling
+    # above was measured, and it excluded every free-bandwidth host on the
+    # market for a benefit of under two cents: on 2026-08-02 it left just THREE
+    # candidates at --max-cost-per-tb 3.0, against eight at 1500. Three is thin
+    # enough that --create-best failing is a live outcome, and this search has
+    # already lost the offer race twice.
+    #
+    # 1500 keeps us above the 1311 Mb/s host that actually stalled, while
+    # admitting the 1678-1730 Mb/s hosts that carry $0.000/TB bandwidth.
+    ap.add_argument("--min-speed", type=float, default=1500,
+                    help="Mb/s floor; stay above ~1300 or the pull dominates")
     ap.add_argument("--max-cost", type=float, default=0.40,
                     help="hard ceiling on modelled one-shot $, so a fast host "
                          "still cannot charge whatever it likes")
@@ -133,7 +176,8 @@ def main():
         download = cost_gb * MODELS_GB
         # Minutes spent pulling the image and then the models, at a derated
         # fraction of the advertised link speed.
-        speed = (o.get("inet_down") or 0.0) * SPEED_DERATE
+        speed = min((o.get("inet_down") or 0.0) * SPEED_DERATE,
+                    PIPELINE_CEILING_MBPS)
         dl_min = ((IMAGE_GB + MODELS_GB) * 8 * 1000 / speed / 60) if speed else 999.0
         rental = dph * (OCCUPANCY_EX_DOWNLOAD_H + dl_min / 60.0)
         total = rental + download
