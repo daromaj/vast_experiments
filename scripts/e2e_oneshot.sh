@@ -25,7 +25,7 @@ set -uo pipefail
 # earlier listing loses the race often enough to be the normal case. And
 # agent_vastai.py's create re-runs its OWN search, which filters
 # inet_down >= 5000 - that excludes every host worth renting now that advertised
-# link speed is known not to predict pull time (see PIPELINE_CEILING_MBPS in
+# link speed is known not to predict pull time (see OBSERVED_MEDIAN_SHARE_MBPS in
 # search_cheap_egress.py). Passing a machine_id through this script therefore
 # silently bypasses the ranking that chose it.
 MACHINE_ID="${1:?usage: e2e_oneshot.sh <machine_id|best>}"

@@ -35,7 +35,7 @@ MIN_INET_DOWN_SPEED = 1500  # Mb/s floor. Was 5000, then 2500, now 1500. The flo
 # It is NOT there to chase the fastest link, and 2500 had drifted into doing exactly that:
 # measured 2026-08-02, it left only three candidate hosts under a $3/TB ceiling and excluded every
 # $0.000/TB host on the market. 1500 stays above the host that actually stalled while admitting
-# the 1678-1730 Mb/s hosts that carry free bandwidth. See PIPELINE_CEILING_MBPS below for why
+# the 1678-1730 Mb/s hosts that carry free bandwidth. See OBSERVED_MEDIAN_SHARE_MBPS below for why
 # paying for advertised speed above ~1600 Mb/s buys nothing.
 MAX_DPH = 0.60  # $/hr hard cap on rental price - very fast hosts get pricey, this reins it in
 MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is ~31.5 GB/s
@@ -50,26 +50,31 @@ IMAGE_PULL_GB = 9.5  # GB - vastai/comfy:v0.28.0-cuda-12.9-py312, compressed siz
 # It costs TIME but not MONEY: the 2026-07-27 e2e run billed bwd = 34.4 GB, i.e. the models alone,
 # so vast does not charge egress on the image pull. That is why it belongs in the time term below
 # and not in download_cost_total - and why a $-only ranking was blind to a 14-minute stall.
-SPEED_DERATE = 0.80  # Was 0.35, which was never calibrated - it was a reaction to machine 69187
-# stalling, applied to every host. Measured 2026-08-02, a host at or below the pipeline ceiling
-# achieves ~80% of its advertised rate (1699 Mb/s -> 1371 Mb/s = 80.7%). Keeping 0.35 alongside
-# the ceiling below would be worse than either alone: the cap would bind only for fast hosts, so
-# the model would still claim a 7398 Mb/s box pulls 2x faster than a 1678 Mb/s one. It does not.
-PIPELINE_CEILING_MBPS = 1300  # ...and cap it, because a derate alone still scales with the
-# advertised number. Measured across three runs ([PHASE] "downloads finished" vs the advertised
-# inet_down recorded in create.log):
-#     7398 Mb/s -> 3m29s -> 1299 Mb/s achieved (17.6% of advertised)
-#     1699 Mb/s -> 3m18s -> 1371 Mb/s achieved (80.7%)
-#     7944 Mb/s -> 5m40s ->  799 Mb/s achieved (10.1%)
-# The 1699 Mb/s host beat the 7944 Mb/s one. The reason is that inet_down is the MACHINE's uplink
-# and every instance on that machine shares it: a rental gets roughly link/tenants. Headline
-# numbers belong to multi-GPU rigs with several renters on one pipe, so a big advertised figure
-# buys a fraction of itself, while a modest single-tenant host hands over most of what it claims.
-# Contention also explains the 799 Mb/s run, which fell BELOW the band - a fixed cap could not.
-# So 1300 is an observed median share, not a physical ceiling: an idle host can beat it and a busy
-# one can fall far short, which is why MIN_INET_DOWN_SPEED still earns its keep as insurance and
-# why n=3 is a genuine caveat. Capping is still right for RANKING - without it the score pays
-# TIME_VALUE_USD_PER_MIN for minutes that are never saved and outbids cheap hosts for fast ones.
+SPEED_DERATE = 0.90  # Applies below the ceiling. Rests on a SINGLE point - a 1699 Mb/s host
+# delivered 1638 Mb/s, 96.4% - and is hedged down to 0.90 because n=1. Weakest constant here.
+OBSERVED_MEDIAN_SHARE_MBPS = 1700  # Measured, six runs. Regenerate with scripts/calibrate_bandwidth.py,
+# which reads provisioning.log directly rather than trusting this comment:
+#     advertised   window   achieved     % of advertised
+#     1699 Mb/s     166 s   1638 Mb/s    96.4%
+#     7318 Mb/s      86 s   3161 Mb/s    43.2%
+#     7398 Mb/s     205 s   1408 Mb/s    19.0%
+#     7944 Mb/s      98 s   2774 Mb/s    34.9%
+#     8021 Mb/s     159 s   1710 Mb/s    21.3%
+#     9135 Mb/s     261 s   1106 Mb/s    12.1%
+# CORRECTION 2026-08-02: this listed 7398->1299, 1699->1371, 7944->799 and the constants were fitted
+# to them. Wrong. They used the ABSOLUTE offset of "[PHASE] downloads finished" as the download
+# duration, but downloads start only once apt finishes; under the old provisioning script the
+# blocking 2 GB CUDA install ran first, charging the 7944 Mb/s run 3m32s of apt against its model
+# pull (340 s vs the real 98 s) and reporting 799 Mb/s for a host that delivered 2774.
+# WHAT THE CORRECTED DATA SAYS: among hosts advertising >=3000 Mb/s, achieved spans 1106-3161 Mb/s
+# and does NOT track the advertised figure - the 9135 Mb/s host was the slowest of the six, the
+# 7318 Mb/s host the fastest. Above the floor, advertised inet_down carries no information.
+# WHY: inet_down is the MACHINE's uplink and every instance shares it, so a rental gets roughly
+# link/tenants. Headline numbers belong to multi-GPU rigs with several renters on one pipe; a
+# modest single-tenant host hands over nearly all it claims (the 1699 Mb/s box: 96.4%).
+# So 1700 is an observed median share, not a physical ceiling, and with a 2.9x spread it predicts
+# no individual host well. MIN_INET_DOWN_SPEED plus a price ranking does the real work; capping
+# only stops the score paying TIME_VALUE_USD_PER_MIN for minutes that are never saved.
 TIME_VALUE_USD_PER_MIN = 0.02  # What a minute of waiting is worth, used to rank cost against
 # speed in one number. $0.02/min says five cents buys about two and a half minutes. Ranking on $
 # alone picks hosts that stall; ranking on time alone invites being gouged for a faster link.
@@ -297,7 +302,7 @@ def calculate_total_cost(offer: Dict) -> float:
     # models understated a slow host by ~28% of its download time and hid the fact that the
     # image pull happens before ssh even answers, where nothing is watching it.
     inet_down_mbps = min((offer.get('inet_down', 0) or 0) * SPEED_DERATE,
-                         PIPELINE_CEILING_MBPS)
+                         OBSERVED_MEDIAN_SHARE_MBPS)
     pull_gb = DATA_DOWNLOAD_GB + IMAGE_PULL_GB
     if inet_down_mbps > 0:
         download_seconds = (pull_gb * 8 * 1000) / inet_down_mbps  # GB->gigabit->megabit / Mbps
@@ -517,7 +522,8 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
             lines.append(fline)
         lines.append("")
         lines.append(f"Down = host inet_down (advertised). DLm = est. minutes to pull {IMAGE_PULL_GB}GB image + {DATA_DOWNLOAD_GB}GB models (the real time sink on slow hosts).")
-        lines.append(f"         DLm caps out at {PIPELINE_CEILING_MBPS}Mb/s achieved: measured, a 1699Mb/s host beat a 7944Mb/s one, so advertised speed above ~{int(PIPELINE_CEILING_MBPS/SPEED_DERATE)}Mb/s buys nothing.")
+        lines.append(f"         DLm caps out at {OBSERVED_MEDIAN_SHARE_MBPS}Mb/s achieved: over 6 runs, hosts advertising >=3000Mb/s delivered 1106-3161Mb/s with NO relation to the")
+        lines.append(f"         advertised figure (the 9135Mb/s host was slowest, the 7318Mb/s host fastest), so above ~{int(OBSERVED_MEDIAN_SHARE_MBPS/SPEED_DERATE)}Mb/s advertised you are buying noise. Rank on price.")
         lines.append("")
         lines.append("Row colors: GREEN = on-demand, fixed-price. YELLOW = bid, interruptible (auto --bid_price) - can be outbid mid-render.")
         lines.append("")

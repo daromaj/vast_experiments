@@ -42,43 +42,48 @@ IMAGE_GB = 9.5
 # Machine 54134 at 1699 Mb/s had ssh up in 52 s. Advertised speed is a weak
 # predictor, so derate it hard and keep a floor under --min-speed rather than
 # trusting the number.
-# 0.35 -> 0.80. The old value was not calibrated against anything: it was a
-# reaction to machine 69187 stalling, applied to every host. Measured, a host
-# at or below the pipeline ceiling achieves ~80% of its advertised rate
-# (1699 Mb/s -> 1371 Mb/s = 80.7%). Keeping 0.35 while adding the ceiling below
-# would be worse than either alone - the cap would bind only for fast hosts,
-# leaving the model still claiming a 7398 Mb/s box beats a 1678 Mb/s one by 2x.
-SPEED_DERATE = 0.80
-# A derate alone still says a 7398 Mb/s host pulls 4x faster than a 1700 Mb/s
-# one. Measured across three runs ([PHASE] "downloads finished" vs the
-# advertised inet_down in create.log), it does not:
+# Applies to hosts below the median-share figure. Rests on a SINGLE measured
+# point - a 1699 Mb/s host delivered 1638 Mb/s, 96.4% - and is hedged down to
+# 0.90 because n=1. It is the weakest constant in this file.
+SPEED_DERATE = 0.90
+# Measured, six runs. Regenerate with scripts/calibrate_bandwidth.py, which
+# reads provisioning.log directly instead of trusting this comment:
 #
-#     7398 Mb/s -> 3m29s -> 1299 Mb/s achieved (17.6% of advertised)
-#     1699 Mb/s -> 3m18s -> 1371 Mb/s achieved (80.7%)
-#     7944 Mb/s -> 5m40s ->  799 Mb/s achieved (10.1%)
+#     advertised   window   achieved     % of advertised
+#     1699 Mb/s     166 s   1638 Mb/s    96.4%
+#     7318 Mb/s      86 s   3161 Mb/s    43.2%
+#     7398 Mb/s     205 s   1408 Mb/s    19.0%
+#     7944 Mb/s      98 s   2774 Mb/s    34.9%
+#     8021 Mb/s     159 s   1710 Mb/s    21.3%
+#     9135 Mb/s     261 s   1106 Mb/s    12.1%
 #
-# The 1699 Mb/s host finished FASTER than the 7944 Mb/s one.
+# CORRECTION 2026-08-02: this block previously listed 7398->1299, 1699->1371 and
+# 7944->799 and the constants were fitted to them. Those numbers were wrong.
+# They used the ABSOLUTE offset of "[PHASE] downloads finished" as the download
+# duration, but downloads start only after apt finishes. Under the old
+# provisioning script the blocking 2 GB CUDA install ran first, so the 7944 Mb/s
+# run was charged 3m32s of apt against its model pull - 340 s rather than the
+# real 98 s - and reported 799 Mb/s for a host that actually delivered 2774.
 #
-# WHY: inet_down is the MACHINE's uplink, and it is shared by every instance on
-# that machine. What a rental gets is roughly link/tenants, not link. The big
-# advertised numbers belong to multi-GPU rigs with several renters on one fat
-# pipe, so a headline 7398 buys a fraction of itself; a modest 1699 Mb/s host is
-# likelier to be small or single-tenant and hand over most of what it claims.
-# That is the better reading of the table above than any fixed pipeline cap:
-# a cap cannot explain the 799 Mb/s run, which came in BELOW the band, but
-# contention explains it immediately.
+# WHAT THE CORRECTED DATA SAYS: among hosts advertising >=3000 Mb/s, achieved
+# throughput spans 1106-3161 Mb/s and does NOT track the advertised figure. The
+# 9135 Mb/s host was the slowest of the six; the 7318 Mb/s host was the fastest.
+# Above the floor, advertised inet_down carries essentially no information.
 #
-# So this constant is an observed MEDIAN SHARE under contention, not a physical
-# ceiling. Nothing stops an uncontended host beating it or a busy one falling
-# far short - which is also why a --min-speed floor still earns its place as
-# insurance, and why n=3 is a real caveat rather than a formality.
+# WHY: inet_down is the MACHINE's uplink, shared by every instance on it, so a
+# rental gets roughly link/tenants. Big advertised numbers belong to multi-GPU
+# rigs with several renters on one fat pipe; a modest single-tenant host hands
+# over nearly all of what it claims (the 1699 Mb/s box: 96.4%).
 #
-# Capping at it is nonetheless the right conservative move for RANKING: without
-# it the score pays --time-value for minutes that never get saved, and reliably
-# outbids a cheap host for an expensive fast one. That is exactly how the
-# 2026-08-02 run rented a $0.481/hr 7398 Mb/s box at $2.667/TB when a $0.334/hr
-# 1678 Mb/s box at $0.000/TB was available and provisioned in the same time.
-PIPELINE_CEILING_MBPS = 1300
+# So this is an observed MEDIAN SHARE, not a physical ceiling, and with a 2.9x
+# spread it is a poor predictor for any individual host. It is kept because
+# ranking needs a number: without a cap the score pays --time-value for minutes
+# that never get saved and reliably outbids a cheap host for an expensive fast
+# one. That is how the 2026-08-02 run rented a $0.481/hr 7398 Mb/s box at
+# $2.667/TB when a $0.334/hr 1678 Mb/s box at $0.000/TB was available and
+# provisioned in the same time. The floor plus a price ranking is what actually
+# does the work here; this constant only stops the model overpaying for speed.
+OBSERVED_MEDIAN_SHARE_MBPS = 1700
 # Rental time for one 58 s video end to end EXCLUDING every download: boot, the
 # rest of provisioning, a cold-cache render, output upload, teardown. Download
 # time is added per offer from its link speed. Folding it into a single constant
@@ -177,7 +182,7 @@ def main():
         # Minutes spent pulling the image and then the models, at a derated
         # fraction of the advertised link speed.
         speed = min((o.get("inet_down") or 0.0) * SPEED_DERATE,
-                    PIPELINE_CEILING_MBPS)
+                    OBSERVED_MEDIAN_SHARE_MBPS)
         dl_min = ((IMAGE_GB + MODELS_GB) * 8 * 1000 / speed / 60) if speed else 999.0
         rental = dph * (OCCUPANCY_EX_DOWNLOAD_H + dl_min / 60.0)
         total = rental + download

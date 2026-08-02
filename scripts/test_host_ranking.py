@@ -53,7 +53,7 @@ def check(name, cond, detail=""):
 def dl_min_ce(o):
     """search_cheap_egress's download-time term, mirrored."""
     speed = min((o.get("inet_down") or 0.0) * ce.SPEED_DERATE,
-                ce.PIPELINE_CEILING_MBPS)
+                ce.OBSERVED_MEDIAN_SHARE_MBPS)
     return (ce.IMAGE_GB + ce.MODELS_GB) * 8 * 1000 / speed / 60
 
 

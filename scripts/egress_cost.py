@@ -73,8 +73,11 @@ OCCUPANCY_EX_PULL_H = 0.23
 # inet_down is the machine's uplink shared across its tenants, so a rental gets
 # roughly link/tenants - which is why the headline number on a busy multi-GPU
 # rig buys a fraction of itself. See provision_table.py for the calibration.
-SPEED_DERATE = 0.80
-PIPELINE_CEILING_MBPS = 1300
+# Recalibrated 2026-08-02 from 0.80/1300 after the earlier fit was found to
+# measure the download window from t=0 instead of from "downloads starting",
+# charging blocking apt time to the model pull. See provision_table.py.
+SPEED_DERATE = 0.90
+OBSERVED_MEDIAN_SHARE_MBPS = 1700
 
 TIERS = [0.0, 0.004, 1.0, 2.667, 4.0, 10.0]
 
@@ -149,7 +152,7 @@ def main():
         tb = (o.get("inet_down_cost") or 0.0) * GIB
         dph = o.get("dph_total") or 0.0
         spd = min((o.get("inet_down") or 0.0) * SPEED_DERATE,
-                  PIPELINE_CEILING_MBPS)
+                  OBSERVED_MEDIAN_SHARE_MBPS)
         # Both pulls burn rental: the image first, then the models.
         pull_gb = (BILLED_GIB + IMAGE_GIB) * GIB**3 / 1000**3  # GiB -> gigabit basis
         dl_min = (pull_gb * 8 * 1000 / spd / 60) if spd else 999.0

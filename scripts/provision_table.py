@@ -6,38 +6,61 @@ Time-to-provision and one-shot cost, across advertised speed x download price.
     scripts/provision_table.py --offers       # the same model applied to live offers
 
 The point of the grid is to make one thing obvious before renting anything:
-above roughly 1500 Mb/s advertised, buying more link speed buys almost no time,
-because the host's NIC stopped being the bottleneck. Download PRICE keeps
-mattering all the way up. So the two axes are not symmetric, and the intuition
-that a faster host is a better host is worth about $0.10 a video.
+above roughly 1500 Mb/s advertised, buying more link speed buys almost no time.
+Not because the NIC saturates - it does not - but because what a rental
+receives is set by how many tenants share the machine's uplink, and the
+advertised figure says nothing about that. Download PRICE keeps mattering all
+the way up. So the two axes are not symmetric, and the intuition that a faster
+host is a better host is worth about $0.10 a video.
 
-CALIBRATION - three measured runs, from output/*/provisioning.log, comparing
-the [PHASE] "downloads finished" offset against the host's advertised inet_down
-recorded in create.log:
+CALIBRATION - six measured runs. Regenerate with scripts/calibrate_bandwidth.py,
+which reads the numbers out of output/*/provisioning.log rather than trusting
+this comment.
 
-    advertised   downloads finished   achieved     % of advertised
-    7398 Mb/s    3m29s (209 s)        1299 Mb/s    17.6%
-    1699 Mb/s    3m18s (198 s)        1371 Mb/s    80.7%
-    7944 Mb/s    5m40s (340 s)         799 Mb/s    10.1%
+    advertised   window   achieved     % of advertised
+    1699 Mb/s     166 s   1638 Mb/s    96.4%
+    7318 Mb/s      86 s   3161 Mb/s    43.2%
+    7398 Mb/s     205 s   1408 Mb/s    19.0%
+    7944 Mb/s      98 s   2774 Mb/s    34.9%
+    8021 Mb/s     159 s   1710 Mb/s    21.3%
+    9135 Mb/s     261 s   1106 Mb/s    12.1%
 
-The 1699 Mb/s host finished FASTER than the 7944 Mb/s one.
+CORRECTION, 2026-08-02. An earlier version of this block listed 7398->1299,
+1699->1371 and 7944->799 and fitted the model to them. Those were wrong. They
+used the ABSOLUTE offset of the "[PHASE] downloads finished" line as the
+download duration, but downloads do not start at t=0 - they start when apt
+finishes. Under the old provisioning script the blocking 2 GB CUDA apt install
+ran first, so the 7944 Mb/s run was charged 3m32s of apt time against its model
+pull: 340 s instead of the real 98 s, reporting 799 Mb/s for a host that
+actually delivered 2774. The window is now measured between "downloads
+starting" and "downloads finished", which is the thing being timed.
 
-The mechanism is contention, not a pipeline limit. inet_down is the MACHINE's
-uplink and every instance on it shares that link, so a rental receives roughly
-link/tenants. The headline numbers belong to multi-GPU rigs with several renters
-behind one fat pipe, which is why a 7398 delivers a fraction of itself, while a
-modest host that is small or single-tenant hands over most of what it claims.
-This also explains the 799 Mb/s run, which came in BELOW the band - a fixed
-ceiling cannot account for that, contention can.
+WHAT THE CORRECTED DATA SAYS. Among hosts advertising >=3000 Mb/s, achieved
+throughput ranges 1106-3161 Mb/s - a 2.9x spread - and does not track the
+advertised figure at all. The 9135 Mb/s host was the SLOWEST in the entire set;
+the 7318 Mb/s host was the fastest. Above the floor, advertised inet_down
+carries essentially no information about what you will receive.
 
-    achieved = min(advertised x LINK_DERATE, PIPELINE_CEILING)
+The mechanism is contention. inet_down is the MACHINE's uplink and every
+instance on it shares that link, so a rental receives roughly link/tenants.
+Headline numbers belong to multi-GPU rigs with several renters behind one fat
+pipe. A modest single-tenant host hands over nearly all of what it claims - the
+1699 Mb/s box delivered 96.4%.
 
-So PIPELINE_CEILING is an observed MEDIAN SHARE, not a physical cap: an idle
-host can exceed it and a busy one can fall far short. Modelling it as a cap is
-the conservative choice for ranking - it stops us paying for advertised
-bandwidth we will not receive - but it should not be read as a guarantee, and
-n=3 is a real caveat. The conclusion that survives regardless: past ~1700 Mb/s
-advertised, extra speed is not what you are buying.
+    achieved = min(advertised x LINK_DERATE, OBSERVED_MEDIAN_SHARE)
+
+OBSERVED_MEDIAN_SHARE is exactly that - the median share a rental actually got -
+and not a physical cap: hosts both exceed it and fall far short. It was called
+PIPELINE_CEILING while I believed the limit was in the download pipeline; the
+limit is contention, so the name was renamed to stop it implying a mechanism
+that does not exist. It is kept only so the table can put a number in a cell.
+Do not read it as a prediction for any individual host - the honest summary of
+n=6 is "roughly 1700 Mb/s, plus or minus a factor of two".
+
+The policy conclusion is unchanged and is now better supported: above the
+~1500 Mb/s floor, do not pay for advertised bandwidth. Rank on price.
+LINK_DERATE rests on a single sub-3000 Mb/s measurement (96.4%) and is held at
+0.90 as a hedge; it is the weakest number here.
 """
 import argparse
 import json
@@ -50,8 +73,8 @@ GIB = 1024
 BILLED_GIB = 34.6
 IMAGE_GIB = 9.5          # container image: costs time, never money
 
-LINK_DERATE = 0.80       # fits the 1699 Mb/s point at 80.7%
-PIPELINE_CEILING = 1300  # Mb/s, the band the two fast hosts actually delivered
+LINK_DERATE = 0.90       # the one sub-3000 point measured 96.4%; hedged down
+OBSERVED_MEDIAN_SHARE = 1700  # Mb/s, median of five >=3000 Mb/s hosts (spread 1106-3161)
 
 # create -> ssh_up was 38 s on the 2026-08-02 run because the host already had
 # the image. A cache MISS is the single largest unpredictable cost in the whole
@@ -70,7 +93,7 @@ PRICES = [0.0, 1.0, 2.667, 4.0, 6.667, 10.0]
 
 
 def achieved_mbps(advertised):
-    return min(advertised * LINK_DERATE, PIPELINE_CEILING)
+    return min(advertised * LINK_DERATE, OBSERVED_MEDIAN_SHARE)
 
 
 def download_min(advertised, gib):
@@ -95,7 +118,7 @@ def grid(dph, image_cached):
     print(f"\nassumptions: ${dph:.3f}/hr, {BILLED_GIB} GB billed payload, "
           f"{RENDER_MIN:.0f} min render, image "
           f"{'CACHED on host' if image_cached else 'PULLED (9.5 GB)'}")
-    print(f"achieved = min(advertised x {LINK_DERATE}, {PIPELINE_CEILING} Mb/s)\n")
+    print(f"achieved = min(advertised x {LINK_DERATE}, {OBSERVED_MEDIAN_SHARE} Mb/s)\n")
 
     w = 14
     print(f"{'advertised':>11} {'provision':>10} {'achieved':>9} |"
