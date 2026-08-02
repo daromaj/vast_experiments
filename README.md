@@ -11,6 +11,43 @@ InfiniteTalk is an AI-powered video generation system that combines:
 
 This repository contains testing and setup scripts to verify the Docker environment locally before deploying to vast.ai.
 
+## Planning numbers (rule of thumb)
+
+One ~60 s video, on a **fresh 5090 rental**, current shipped config
+(`mode: default`, deferred CUDA toolchain, price-ranked host selection):
+
+| | plan for | use when you need a safe margin |
+|---|---|---|
+| wall clock, rent → destroyed | **15 min** | **20 min** |
+| cost per video | **$0.20** | **$0.30** |
+
+Measured typical is ~14 min / $0.10–0.15; the actual end-to-end run on
+2026-08-02 came in at 16m 09s and $0.166. So $0.20 already carries slack — it
+is roughly "typical time, but assume you land on a host that charges egress".
+$0.30 covers the whole pessimistic stack at once: 20 min x $0.50/hr + storage +
+$2.667/TB egress = $0.274.
+
+**These numbers amortise nothing.** Provisioning (~5 min, ~$0.03) and the
+34.6 GB model pull are paid once per INSTANCE, not once per video. A second
+video on the same box skips all of it — roughly 9 min instead of 15, and
+per-video cost drops toward $0.09–0.12 over a batch of five.
+
+Caveats worth knowing before you trust the above:
+
+- **The render figure rests on n=2** (480.4 s and 507.7 s). It is the largest
+  single line in the budget and the least measured.
+- The dominant source of variance is **not bandwidth**, it is whether the host
+  can pull the container image. Model download spans 86–261 s (~3 min of
+  spread); a host that cannot pull the image is abandoned after ~90 s and costs
+  a whole extra rental. On 2026-08-02 four in a row failed.
+- Assumes an **image already cached on the host**. A cold 9.5 GB pull adds
+  minutes and sometimes never finishes — one host failed to complete it in 14.
+- Assumes a **$0.00/TB egress** host. They exist and the ranking prefers them,
+  but if you land on $2.667/TB add $0.09 (~+60% on a typical bill).
+- 5090 only. The 4090 has not been measured on this stack.
+
+Derivations and the runs behind every number are in the dated sections below.
+
 ## Directory Structure
 
 - `SIMPLE_START.md` - Step-by-step Docker setup guide for testing
