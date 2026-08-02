@@ -160,10 +160,15 @@ rsh 'grep -c "y-encode cache" /var/log/portal/*.log 2>/dev/null; grep "^environm
 # is auditable.
 if [[ -n "$NODE_PIN" ]]; then
     say "pinning ComfyUI-WanVideoWrapper to $NODE_PIN"
+    # The directory is globbed, not spelled out: povision_fp8.sh clones from a
+    # .git URL and git keeps that in the basename, so this repo lands in
+    # custom_nodes/ComfyUI-WanVideoWrapper.git/ while its siblings do not have
+    # the suffix. Hardcoding the un-suffixed name cost one rental.
+    #
     # Note the fetch has no --depth: provisioning clones full, and passing a
     # depth to fetch would truncate that history and could drop the very commit
     # being pinned to.
-    rsh "cd /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper \
+    rsh "cd \$(ls -d /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper*/ | head -1) \
          && { git checkout -f $NODE_PIN 2>/dev/null || { git fetch origin 2>&1 | tail -1; git checkout -f $NODE_PIN; } ; } 2>&1 | tail -3 \
          && git log -1 --format='PINNED %h %ad %s' --date=short" 300 \
         | tee "$RUN_DIR/node_pin.log"
@@ -193,7 +198,7 @@ if [[ -n "$NODE_PIN" ]]; then
         # there - January needs older deps, and older deps are already satisfied.
         say "wrapper did not load; installing its pinned requirements"
         rsh 'source /venv/main/bin/activate \
-             && pip install --no-cache-dir -r /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt 2>&1 | tail -20' 600 \
+             && pip install --no-cache-dir -r $(ls -d /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper*/ | head -1)requirements.txt 2>&1 | tail -20' 600 \
             | tee "$RUN_DIR/node_pin_pip.log"
         supervisor_restart_and_wait || { say "ComfyUI did not come back after pip"; exit 1; }
         node_present WanVideoSampler || { say "pinned wrapper will not load - aborting"; exit 1; }
