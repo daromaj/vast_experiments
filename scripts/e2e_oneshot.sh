@@ -2,7 +2,8 @@
 # End-to-end one-shot rental: create -> provision -> render one 58 s clip ->
 # download -> destroy, with a wall-clock stamp at every boundary.
 #
-#   ./scripts/e2e_oneshot.sh 72636
+#   ./scripts/e2e_oneshot.sh best     # rank and rent in one step (preferred)
+#   ./scripts/e2e_oneshot.sh 72636    # a machine_id you already chose
 #
 # Everything measured so far has been per-render time on a box that was already
 # up. That is the wrong number for the "rent it, make one video, throw it away"
@@ -19,7 +20,15 @@
 # derived from timestamps taken at the time, not from log scraping afterwards.
 set -uo pipefail
 
-MACHINE_ID="${1:?usage: e2e_oneshot.sh <machine_id>}"
+# "best" ranks and rents in one process, which matters twice over. The
+# cheap-egress hosts are the contended ones, so naming a machine_id read from an
+# earlier listing loses the race often enough to be the normal case. And
+# agent_vastai.py's create re-runs its OWN search, which filters
+# inet_down >= 5000 - that excludes every host worth renting now that advertised
+# link speed is known not to predict pull time (see PIPELINE_CEILING_MBPS in
+# search_cheap_egress.py). Passing a machine_id through this script therefore
+# silently bypasses the ranking that chose it.
+MACHINE_ID="${1:?usage: e2e_oneshot.sh <machine_id|best>}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
@@ -87,11 +96,30 @@ print(" ".join(str(i["id"]) for i in d))'
 
 BEFORE=" $(list_instance_ids) "
 stamp create_issued
-say "creating from machine $MACHINE_ID"
-python3 scripts/agent_vastai.py create "$MACHINE_ID" 2>&1 | tee "$RUN_DIR/create.log"
+if [[ "$MACHINE_ID" == "best" ]]; then
+    say "ranking and renting the best cheap-bandwidth 5090 in one step"
+    python3 scripts/search_cheap_egress.py --max-cost-per-tb "${MAX_TB:-3.0}" \
+        --create-best 2>&1 | tee "$RUN_DIR/create.log"
+else
+    say "creating from machine $MACHINE_ID"
+    python3 scripts/agent_vastai.py create "$MACHINE_ID" 2>&1 | tee "$RUN_DIR/create.log"
+fi
 if ! grep -q "Instance created successfully" "$RUN_DIR/create.log"; then
     say "create failed - aborting before anything bills"
     flock -u 200
+    exit 1
+fi
+# A bid instance can be reclaimed mid-render, losing the rental and the clip.
+# This has already happened once, from a missing instance_type defaulting to
+# 'bid'. Only the ranked path prints this line, so only it is checked.
+if [[ "$MACHINE_ID" == "best" ]] \
+   && ! grep -q "Creating ON-DEMAND instance" "$RUN_DIR/create.log"; then
+    say "created a BID instance - not acceptable for a one-shot render"
+    for id in $(list_instance_ids); do
+        [[ "$BEFORE" == *" $id "* ]] || INSTANCE="$id"
+    done
+    flock -u 200
+    cleanup_destroy
     exit 1
 fi
 
