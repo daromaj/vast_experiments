@@ -42,11 +42,20 @@ def unique_frames(path):
     return int(m[-1]) if m else None
 
 
-def frame_deltas(path):
-    """Mean per-frame luma difference, and how many frames barely changed."""
-    out = run(["ffmpeg", "-v", "error", "-i", path,
-               "-vf", "tblend=all_mode=difference,signalstats,"
-                      "metadata=print:key=lavfi.signalstats.YAVG:file=-",
+def frame_deltas(path, crop=None):
+    """
+    Mean per-frame luma difference, and how many frames barely changed.
+
+    `crop` is an ffmpeg crop spec ("w:h:x:y") applied before differencing, so
+    the same series can be computed for one region of the frame. Cropping first
+    matters: differencing the whole frame and then cropping would still average
+    in whatever the rest of the picture did.
+    """
+    vf = "tblend=all_mode=difference,signalstats," \
+         "metadata=print:key=lavfi.signalstats.YAVG:file=-"
+    if crop:
+        vf = f"crop={crop}," + vf
+    out = run(["ffmpeg", "-v", "error", "-i", path, "-vf", vf,
                "-f", "null", "-"])
     vals = [float(v) for v in
             re.findall(r"lavfi\.signalstats\.YAVG=([0-9.]+)", out.stdout)]
