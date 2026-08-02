@@ -138,7 +138,7 @@
     "inputs": {
       "backend": "inductor",
       "fullgraph": false,
-      "mode": "max-autotune-no-cudagraphs",
+      "mode": "default",
       "dynamic": false,
       "dynamo_cache_size_limit": 64,
       "compile_transformer_blocks_only": true,

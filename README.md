@@ -408,6 +408,37 @@ rentals.** Whether `default` beats no-compile is open.
 
 The three arms cost $0.331 billed.
 
+### 2026-08-02 — settled: `mode=default` is 27% faster, and compile is worth keeping
+
+Rerun of the above with the cache actually wiped before every arm, on one Poland
+5090 (`46600649`, machine 144163, $0.481/hr), full 58 s clip each:
+
+| arm | `mode` | render | inductor cache after | vs shipped |
+|---|---|---|---|---|
+| a_autotune | `max-autotune-no-cudagraphs` (shipped) | 659.2 s | 359 MiB | — |
+| **b_default** | **`default`** | **480.4 s** | **18 MiB** | **−178.8 s (−27.1%)** |
+| c_nocompile | `compile_args` removed | 564.4 s | 0 MiB | −94.8 s (−14.4%) |
+
+Both July conclusions were right in direction and wrong in size. Autotune loses
+by **178.8 s, not 12.3 s** — the July figure came from A-vs-C, which measures
+autotune against no-compile and skips the option that actually wins. And
+compile *is* worth keeping: `default` beats no-compile by 84.0 s. The 359 MiB
+versus 18 MiB cache shows why — autotuning spends three minutes benchmarking
+kernel variants across 21 windows, and only earns it back on a second render
+that a one-shot rental never performs.
+
+No quality cost. Edge energy 35.2491 / 35.2520 / 35.2512 — a 0.008% spread.
+Jerk-over-motion 0.2341 / 0.2334 / 0.2482, so `default` matches autotune and
+only no-compile is measurably rougher. All three: 1454 frames, 58.200998 s.
+Pairwise SSIM 0.9793 / 0.9743 / 0.9733 is mutually equidistant — fp jitter
+reordering kernels, not degradation. (January-vs-current was 0.896, and that
+one was visible.)
+
+**Applied:** `workflows/generated/full/full58_sage_API.json` now ships
+`mode: default`.
+
+$0.38 for all three arms, 34.5 min create→destroyed.
+
 ### 2026-07-27 — output smoothness, and the one real defect
 
 The 58 s output felt like it was not playing smoothly. Four hypotheses, three

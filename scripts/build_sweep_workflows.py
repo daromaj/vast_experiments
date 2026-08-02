@@ -68,6 +68,26 @@ N_I2V_MULTITALK = "192"
 #
 # These candidates now sweep SPEED, not survival. Two runs each: the first pays
 # max-autotune compile cost, only the second is a real generation time.
+#
+# SETTLED 2026-08-02, and the compile column below is now HISTORY, not advice.
+# The sweep never tested compile-off: s3/s6 are named "nocomp" but only switch
+# mode to `default`. A three-arm run on one 5090, cold inductor cache each,
+# full 58 s clip (output/compile_ab_20260802T114832Z):
+#
+#     max-autotune-no-cudagraphs   659.2 s   359 MiB cache
+#     default                      480.4 s    18 MiB cache   <- 27% faster
+#     compile_args removed         564.4 s     0 MiB cache
+#
+# So compile IS worth keeping (default beats no-compile by 84 s) but autotuning
+# costs three minutes it never earns back on a one-shot rental. Quality is
+# unaffected: edge energy 35.2491 / 35.2520 / 35.2512 (0.008% spread), and
+# jerk/motion 0.2341 / 0.2334 / 0.2482 - default matches autotune, no-compile is
+# marginally rougher.
+#
+# The SHIPPED workflow (workflows/generated/full/full58_sage_API.json) is now
+# mode=default. It derives from s5_sage_untiled via make_full58.py, which copies
+# every node except 125.audio - so regenerating it from the row below would
+# silently put max-autotune back. Change s5 too, or re-apply the mode by hand.
 # name, quant, swap, window, steps, scheduler, compile, force_offload, tiled_vae, attention
 CANDIDATES = [
     ("s0_4step_tiled",   "fp8_e4m3fn_fast", 0, 81, 4, "flowmatch_distill", "max-autotune-no-cudagraphs", False, True,  "sdpa"),
