@@ -9,7 +9,8 @@
 # workflow, where provisioning and the cold inductor cache are paid once per
 # video rather than amortised over a sweep. This script measures that number.
 #
-# Config note: it renders full58_sage_API.json, which is the s5 lineage —
+# Config note: it renders full58_sage_API.json by default (override WORKFLOW),
+# which is the s5 lineage —
 # torch.compile on the transformer blocks only. The VAE decoder is deliberately
 # NOT compiled: that is the s8/R2 change, and its 646.5 s first-run autotune
 # never amortises when you generate exactly one clip.
@@ -27,9 +28,15 @@ mkdir -p "$RUN_DIR"
 PHASES="$RUN_DIR/phases.tsv"
 : > "$PHASES"
 
-WORKFLOW=workflows/generated/full/full58_sage_API.json
-AUDIO=input_files/santa_58s.mp3
-IMAGE=input_files/santa-classic-portrait.png
+# Overridable so the same proven path can render a different arm of an A/B.
+# NODE_PIN, if set, rolls ComfyUI-WanVideoWrapper back to that commit-ish after
+# provisioning: a workflow from an older commit will not even load against the
+# current wrapper once a node class has been renamed upstream.
+WORKFLOW="${WORKFLOW:-workflows/generated/full/full58_sage_API.json}"
+AUDIO="${AUDIO:-input_files/santa_58s.mp3}"
+IMAGE="${IMAGE:-input_files/santa-classic-portrait.png}"
+NODE_PIN="${NODE_PIN:-}"
+REMOTE_WORKFLOW="/workspace/$(basename "$WORKFLOW")"
 # Generous: a cold-cache 58 s render has never been timed, so the ceiling is a
 # runaway guard, not an expectation.
 RUN_TIMEOUT=3600
@@ -61,24 +68,43 @@ cleanup_destroy() {
 }
 
 # ---------------------------------------------------------------- create
+# create + id-resolution is serialised under a lock. The vast CLI does not
+# return the new instance id, so it has to be inferred from the account's
+# instance list - and two copies of this script running in parallel (the two
+# arms of an A/B) would otherwise each claim whichever instance appeared last,
+# which is a coin flip over whose box is whose.
+LOCK="${TMPDIR:-/tmp}/e2e_oneshot_create.lock"
+exec 200>"$LOCK"
+flock -x -w 900 200 || { say "timed out waiting for the create lock"; exit 1; }
+
+list_instance_ids() {
+    vastai show instances --raw 2>/dev/null \
+        | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d=[]
+print(" ".join(str(i["id"]) for i in d))'
+}
+
+BEFORE=" $(list_instance_ids) "
 stamp create_issued
 say "creating from machine $MACHINE_ID"
 python3 scripts/agent_vastai.py create "$MACHINE_ID" 2>&1 | tee "$RUN_DIR/create.log"
 if ! grep -q "Instance created successfully" "$RUN_DIR/create.log"; then
     say "create failed - aborting before anything bills"
+    flock -u 200
     exit 1
 fi
 
-# The create call does not print the id; take the newest instance we own.
+# Identify by set difference against the pre-create snapshot rather than by
+# "highest id", so an instance belonging to the other arm can never be adopted.
 for _ in $(seq 1 20); do
-    INSTANCE=$(vastai show instances --raw 2>/dev/null \
-        | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: d=[]
-print(max((i["id"] for i in d), default=""))')
+    for id in $(list_instance_ids); do
+        [[ "$BEFORE" == *" $id "* ]] || { INSTANCE="$id"; break; }
+    done
     [[ -n "$INSTANCE" ]] && break
     sleep 3
 done
+flock -u 200
 [[ -z "$INSTANCE" ]] && { say "could not resolve instance id"; exit 1; }
 say "instance $INSTANCE"
 echo "$INSTANCE" > "$RUN_DIR/instance_id"
@@ -127,11 +153,61 @@ rsh 'cat /var/log/portal/provisioning.log' 120 > "$RUN_DIR/provisioning.log" 2>&
 rsh 'grep -c "y-encode cache" /var/log/portal/*.log 2>/dev/null; grep "^environment=" /etc/supervisor/conf.d/comfyui.conf' 60 \
     > "$RUN_DIR/wanopt_env.txt" 2>&1
 
+# ------------------------------------------------------------- node pin
+# Rolling the wrapper back also reverts the WANOPT multitalk patch, since that
+# is an edit to a tracked file - so R3/R6 vanish and their env flags go inert.
+# No separate un-patch step is needed, but record the resulting HEAD so the run
+# is auditable.
+if [[ -n "$NODE_PIN" ]]; then
+    say "pinning ComfyUI-WanVideoWrapper to $NODE_PIN"
+    # Note the fetch has no --depth: provisioning clones full, and passing a
+    # depth to fetch would truncate that history and could drop the very commit
+    # being pinned to.
+    rsh "cd /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper \
+         && { git checkout -f $NODE_PIN 2>/dev/null || { git fetch origin 2>&1 | tail -1; git checkout -f $NODE_PIN; } ; } 2>&1 | tail -3 \
+         && git log -1 --format='PINNED %h %ad %s' --date=short" 300 \
+        | tee "$RUN_DIR/node_pin.log"
+    grep -q "^PINNED" "$RUN_DIR/node_pin.log" || { say "pin failed"; exit 1; }
+
+    supervisor_restart_and_wait() {
+        rsh 'supervisorctl restart comfyui' 120 >/dev/null
+        for _ in $(seq 1 60); do
+            rsh 'curl -s -m 5 http://127.0.0.1:18188/system_stats >/dev/null 2>&1 && echo UP' 60 \
+                | grep -q UP && return 0
+            sleep 5
+        done
+        return 1
+    }
+    # The pinned node's class list is the actual test: a wrapper that fails to
+    # import still leaves ComfyUI answering /system_stats perfectly happily.
+    node_present() {
+        rsh "curl -s -m 20 http://127.0.0.1:18188/object_info/$1 | head -c 200" 60 \
+            | grep -q "$1"
+    }
+
+    supervisor_restart_and_wait || { say "ComfyUI did not come back after pin"; exit 1; }
+    if ! node_present WanVideoSampler; then
+        # Only now install the pinned revision's requirements. Doing it
+        # unconditionally risks downgrading a package the current torch or the
+        # SageAttention wheel depends on, to fix a problem that usually is not
+        # there - January needs older deps, and older deps are already satisfied.
+        say "wrapper did not load; installing its pinned requirements"
+        rsh 'source /venv/main/bin/activate \
+             && pip install --no-cache-dir -r /workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt 2>&1 | tail -20' 600 \
+            | tee "$RUN_DIR/node_pin_pip.log"
+        supervisor_restart_and_wait || { say "ComfyUI did not come back after pip"; exit 1; }
+        node_present WanVideoSampler || { say "pinned wrapper will not load - aborting"; exit 1; }
+    fi
+    rsh 'curl -s -m 20 http://127.0.0.1:18188/object_info | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d),\"node classes\"); print([k for k in d if \"Wav2Vec\" in k])"' 90 \
+        >> "$RUN_DIR/node_pin.log" 2>&1
+    stamp node_pinned
+fi
+
 # ---------------------------------------------------------------- upload
 say "uploading workflow + assets"
 rsh 'mkdir -p /workspace/scripts /workspace/results /workspace/ComfyUI/input' 60
 scp $(scp_opts) -q "$AUDIO" "$IMAGE" "root@${SSH_HOST}:/workspace/ComfyUI/input/" || exit 1
-scp $(scp_opts) -q "$WORKFLOW" "root@${SSH_HOST}:/workspace/full58_sage_API.json" || exit 1
+scp $(scp_opts) -q "$WORKFLOW" "root@${SSH_HOST}:${REMOTE_WORKFLOW}" || exit 1
 scp $(scp_opts) -q scripts/run_july_tests.py "root@${SSH_HOST}:/workspace/scripts/" || exit 1
 stamp uploaded
 
@@ -140,7 +216,7 @@ say "rendering 58 s clip (cold inductor cache)"
 rsh 'nohup bash -c "while true; do nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits; sleep 5; done" >/workspace/vram.log 2>&1 & echo started' 60 >/dev/null
 
 rsh "/usr/bin/python3 /workspace/scripts/run_july_tests.py \
-        --workflows /workspace/full58_sage_API.json \
+        --workflows ${REMOTE_WORKFLOW} \
         --runs 1 --run-timeout $RUN_TIMEOUT \
         --out /workspace/results/e2e_full58.json 2>&1" $((RUN_TIMEOUT + 300)) \
     | tee "$RUN_DIR/render.log"

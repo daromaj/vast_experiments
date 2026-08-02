@@ -2,7 +2,8 @@
 """
 Objective quality metrics over the whole clip, not four hand-picked frames.
 
-    scripts/quality_metrics.py
+    scripts/quality_metrics.py                       # the July 2026 sweep clips
+    scripts/quality_metrics.py a=one.mp4 b=two.mp4   # any pair, in order
 
 Two different questions need two different metrics:
 
@@ -20,11 +21,22 @@ import re
 import subprocess
 import sys
 
-CLIPS = {
+DEFAULT_CLIPS = {
     "6step_dpm_sdpa": "output/vast_45930851/InfiniteTalk_00012-audio.mp4",
     "4step_distill_sdpa": "output/vast_45930851/InfiniteTalk_00006-audio.mp4",
     "4step_distill_sage": "output/vast_45930851/InfiniteTalk_00014-audio.mp4",
 }
+# The default set answers two questions at once, so its SSIM pairs are chosen by
+# name. Given clips on the command line there is only one pair to form, and the
+# honest label for it depends on whether the sampler changed - which the caller
+# knows and this script does not. So it is reported as "pairwise" with the
+# warning attached, rather than silently claiming to measure quality.
+SSIM_PAIRS_DEFAULT = [
+    ("4step_distill_sdpa", "4step_distill_sage", "ssim_sdpa_vs_sage",
+     "same sampler, different attention kernel - meaningful, expect ~1"),
+    ("6step_dpm_sdpa", "4step_distill_sage", "ssim_6step_vs_4step_divergence",
+     "different sampler AND step count - trajectory divergence, NOT quality"),
+]
 
 
 def ffmpeg(args):
@@ -59,28 +71,42 @@ def ssim(a, b):
     return float(m.group(1)) if m else None
 
 
+def parse_args(argv):
+    if not argv:
+        return DEFAULT_CLIPS, SSIM_PAIRS_DEFAULT
+    clips = {}
+    for arg in argv:
+        if "=" not in arg:
+            sys.exit(f"expected label=path, got {arg!r}")
+        label, path = arg.split("=", 1)
+        clips[label] = path
+    if len(clips) != 2:
+        sys.exit("give exactly two label=path clips, or none for the defaults")
+    a, b = list(clips)
+    return clips, [(a, b, f"ssim_{a}_vs_{b}",
+                    "pairwise - only meaningful if the sampler and step count "
+                    "are identical; otherwise it measures trajectory divergence")]
+
+
 def main():
+    clips, ssim_pairs = parse_args(sys.argv[1:])
+
     rows = {}
-    for name, path in CLIPS.items():
+    for name, path in clips.items():
         rows[name] = {
             "edge_energy": edge_energy(path),
             "temporal_delta": temporal_delta(path),
         }
-        print(f"{name:22} edge={rows[name]['edge_energy']} "
+        print(f"{name:26} edge={rows[name]['edge_energy']} "
               f"flicker={rows[name]['temporal_delta']}", file=sys.stderr)
 
-    pair = ssim(CLIPS["4step_distill_sdpa"], CLIPS["4step_distill_sage"])
-    print(f"SSIM 4step sdpa vs sage: {pair}", file=sys.stderr)
+    out = {"clips": rows}
+    for a, b, key, note in ssim_pairs:
+        val = ssim(clips[a], clips[b])
+        out[key] = val
+        print(f"SSIM {a} vs {b}: {val}  [{note}]", file=sys.stderr)
 
-    # Deliberately also computed, and deliberately labelled as divergence: the
-    # number is low and that is expected, not a quality verdict.
-    div = ssim(CLIPS["6step_dpm_sdpa"], CLIPS["4step_distill_sage"])
-    print(f"SSIM 6step vs 4step (trajectory divergence, NOT quality): {div}",
-          file=sys.stderr)
-
-    print(json.dumps({"clips": rows,
-                      "ssim_sdpa_vs_sage": pair,
-                      "ssim_6step_vs_4step_divergence": div}, indent=2))
+    print(json.dumps(out, indent=2))
     return 0
 
 
