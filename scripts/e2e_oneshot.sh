@@ -98,8 +98,10 @@ BEFORE=" $(list_instance_ids) "
 stamp create_issued
 if [[ "$MACHINE_ID" == "best" ]]; then
     say "ranking and renting the best cheap-bandwidth 5090 in one step"
+    # SKIP carries machine_ids that already failed this attempt, so a retry
+    # cannot be handed the same broken host again.
     python3 scripts/search_cheap_egress.py --max-cost-per-tb "${MAX_TB:-3.0}" \
-        --create-best 2>&1 | tee "$RUN_DIR/create.log"
+        ${SKIP:+--skip $SKIP} --create-best 2>&1 | tee "$RUN_DIR/create.log"
 else
     say "creating from machine $MACHINE_ID"
     python3 scripts/agent_vastai.py create "$MACHINE_ID" 2>&1 | tee "$RUN_DIR/create.log"
@@ -146,8 +148,55 @@ disown 2>/dev/null || true
 trap cleanup_destroy EXIT
 
 # ------------------------------------------------------------------ boot
+# A host that cannot start the container never opens ssh, and waiting for a
+# timeout to notice costs the full 20 minutes of billing for nothing. Vast
+# already knows - it puts the reason in status_msg - so ASK instead of waiting.
+#
+# Seen 2026-08-02 on machine 139787: instance stuck in `loading` with
+#   "Error response from daemon: failed to resolve reference
+#    docker.io/vastai/comfy:v0.28.0-cuda-12.9-py312: not found"
+# while that tag was demonstrably present on Docker Hub (published 2026-07-16).
+# A broken or rate-limited registry mirror on the host, not a stale pin - which
+# is exactly the distinction this has to surface, because bumping the image tag
+# invalidates the cached SageAttention wheel and would have been the wrong fix.
+instance_fault() {
+    vastai show instance "$INSTANCE" --raw 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)                     # API hiccup is not evidence of a fault
+if isinstance(d, list):
+    if not d:
+        sys.exit(0)                 # nor is an empty list
+    d = d[0]
+if not isinstance(d, dict):
+    sys.exit(0)
+msg = (d.get("status_msg") or "").strip()
+status = (d.get("actual_status") or "").lower()
+# Substrings, not exact matches: vast passes the docker daemon message through
+# verbatim and it varies by registry, host and failure mode.
+#
+# Deliberately NOT here: a bare "not found". It is redundant - the real failure
+# already matches "failed to resolve reference" and "error response from
+# daemon" - and it is broad enough to fire on some benign message that happens
+# to contain it. This decides whether to throw away a paid rental, so a false
+# positive costs more than a slow true one.
+FATAL = (
+    "failed to resolve reference", "manifest unknown",
+    "pull access denied", "error response from daemon", "toomanyrequests",
+    "no space left", "no such host", "unauthorized", "invalid reference",
+)
+low = msg.lower()
+if any(f in low for f in FATAL):
+    print(f"{status or 'unknown'}: {msg[:200]}")
+elif status in ("exited", "offline"):
+    print(f"{status}: {msg[:200] or 'instance stopped before ssh came up'}")
+'
+}
+
 say "waiting for ssh"
-for _ in $(seq 1 120); do
+for i in $(seq 1 120); do
     url=$(vastai ssh-url "$INSTANCE" 2>/dev/null | tr -d '[:space:]')
     if [[ "$url" =~ ^ssh://root@([^:]+):([0-9]+)$ ]]; then
         SSH_HOST="${BASH_REMATCH[1]}"; SSH_PORT="${BASH_REMATCH[2]}"
@@ -155,7 +204,22 @@ for _ in $(seq 1 120); do
             break
         fi
     fi
-    SSH_HOST=""; sleep 10
+    SSH_HOST=""
+    # Not every iteration: this is an API call, and the failure it looks for
+    # takes a little while to surface. From the 3rd, every 3rd.
+    if [[ $i -ge 3 && $(( i % 3 )) -eq 0 ]]; then
+        fault=$(instance_fault)
+        if [[ -n "$fault" ]]; then
+            say "HOST FAULT: $fault"
+            say "this host cannot start the container - abandoning it rather "
+            say "than waiting out the ssh timeout"
+            stamp host_fault
+            echo "$fault" > "$RUN_DIR/host_fault.txt"
+            # 75 = EX_TEMPFAIL: retry on another host, do not treat as a bug.
+            exit 75
+        fi
+    fi
+    sleep 10
 done
 [[ -z "$SSH_HOST" ]] && { say "ssh never came up"; exit 1; }
 stamp ssh_up
