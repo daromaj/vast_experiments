@@ -42,6 +42,60 @@ MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is 
 # theoretical (~20-26 measured); PCIe 3.0 x16 and 4.0 x8 both cap at ~15.75. A 20 floor keeps
 # real 4.0 x16 hosts and drops the old/crippled slots (where V100/3090-era boards live).
 
+# --- Where the data is allowed to land ---------------------------------------
+#
+# These two are not tuning knobs. The rented box processes personal data (a
+# child's first name, whatever the buyer typed, the generated likeness), so the
+# GDPR question is not "is this host fast" but "may this host hold it at all".
+#
+# Two independent things are being controlled:
+#
+# 1. WHO runs the machine. vast.ai's default marketplace is consumer hardware in
+#    strangers' homes - an unvetted sub-processor with physical access to the
+#    disk. `datacenter=true` is the only filter that restricts to Secure Cloud;
+#    the CLI's silent default (`verified`/`external`/`rentable`, offers.py:137)
+#    does NOT, and "verified" means vast tested the hardware, not the operator.
+#    Verified against the live API 2026-08-07: `datacenter=true` returns exactly
+#    the `hosting_type == 1` offers, `datacenter=false` exactly `hosting_type == 0`.
+# 2. WHERE it sits. An adequacy decision or the EEA means the onward transfer
+#    needs no separate instrument.
+#
+# What this does NOT fix: vast.ai Inc. is US-established, so renting from them
+# at all is a Chapter V transfer and still needs SCCs with vast.ai regardless of
+# where the box is. Pinning the country removes the SECOND, unassessed transfer
+# (to whoever owns the machine), not the first. Do not read a green result here
+# as "no paperwork needed".
+SECURE_CLOUD_ONLY = True
+
+# EEA, plus every third country with a live European Commission adequacy
+# decision. Checked against the Commission's list on 2026-08-07; the UK decision
+# was renewed 19 Dec 2025 and runs to 27 Dec 2031.
+#
+# The US is included deliberately, and it is the one entry that is not clean:
+# adequacy there covers only DPF-certified organisations, and a GPU host will
+# not be certified. It is here because vast.ai Inc. is American anyway - the
+# SCCs that transfer already needs cover a US-located box too, so excluding US
+# hosts would cost most of the market and buy nothing.
+#
+# Widen this if it starves the search; every code added must have an adequacy
+# decision or be in the EEA. Adding one that does not is how the whole control
+# becomes decorative.
+ALLOWED_COUNTRIES = [
+    # EU
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+    "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+    "SI", "ES", "SE",
+    # EEA non-EU
+    "IS", "LI", "NO",
+    # Adequacy decisions
+    "AD", "AR", "BR", "CA", "CH", "FO", "GG", "IL", "IM", "JP", "JE", "KR",
+    "NZ", "GB", "US", "UY",
+    # US territories carry their own ISO codes but are US soil for transfer
+    # purposes. PR shows up in live results; the rest are here so a Guam host
+    # is not silently rejected on a technicality that means nothing legally.
+    "PR", "GU", "VI", "MP", "AS",
+]
+
 # Cost calculation parameters
 CONTAINER_SIZE_GB = 60  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
 DATA_DOWNLOAD_GB = 34  # GB - actual model payload after dropping the unused fp8 encoder
@@ -225,6 +279,23 @@ def check_for_newer_image() -> None:
               f"(latest: {newest_tag}, {newest_date}).", file=sys.stderr)
 
 
+def extract_country(offer: Dict) -> Optional[str]:
+    """
+    Pull the ISO country code out of an offer's geolocation.
+
+    The API returns "Region, CC" - "South Korea, KR", "Maryland, US", and
+    sometimes ", US" with the region blank. Returns None when there is no
+    trailing two-letter code, which callers must treat as a rejection: an
+    offer whose location cannot be established is not one that can be shown
+    to be lawful.
+    """
+    raw = offer.get('geolocation')
+    if not isinstance(raw, str):
+        return None
+    m = re.search(r',\s*([A-Za-z]{2})\s*$', raw)
+    return m.group(1).upper() if m else None
+
+
 def run_vastai_search(instance_type: str) -> List[Dict]:
     """
     Run vastai search for given instance type (on-demand or bid).
@@ -239,6 +310,12 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
         f"pcie_bw >= {MIN_PCIE_BW} "
         f"dph_total <= {MAX_DPH}"
     )
+    # Server-side narrowing. Both are re-checked on the client below - this half
+    # is an optimisation, the check after the fetch is the control.
+    if SECURE_CLOUD_ONLY:
+        query += " datacenter=true"
+    if ALLOWED_COUNTRIES:
+        query += f" geolocation in [{','.join(ALLOWED_COUNTRIES)}]"
 
     cmd = ["vastai", "search", "offers", query, "--raw"]
 
@@ -256,6 +333,9 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
 
         # Filter out incompatible GPUs and add instance type
         filtered_offers = []
+        dropped_hosting = 0
+        dropped_country: Dict[str, int] = {}
+        dropped_unknown = 0
         for offer in offers:
             gpu_name = offer.get('gpu_name', '')
             # Keep only allowlisted GPU families (empty list => allow everything)
@@ -264,8 +344,38 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
             # Skip if GPU is in exclusion list
             if any(excluded in gpu_name for excluded in EXCLUDE_GPU_NAMES):
                 continue
+
+            # Lawfulness filters, re-checked here rather than trusted to the
+            # query string. A server-side filter that silently stops working
+            # fails OPEN - it just returns more offers, and nothing in the
+            # output says the constraint was dropped.
+            if SECURE_CLOUD_ONLY and offer.get('hosting_type') != 1:
+                dropped_hosting += 1
+                continue
+            if ALLOWED_COUNTRIES:
+                country = extract_country(offer)
+                if country is None:
+                    dropped_unknown += 1
+                    continue
+                if country not in ALLOWED_COUNTRIES:
+                    dropped_country[country] = dropped_country.get(country, 0) + 1
+                    continue
+
             offer['instance_type'] = instance_type
             filtered_offers.append(offer)
+
+        # Say what was thrown away. A filter nobody can see the effect of is a
+        # filter nobody notices the absence of.
+        if dropped_hosting or dropped_unknown or dropped_country:
+            parts = []
+            if dropped_hosting:
+                parts.append(f"{dropped_hosting} not Secure Cloud")
+            if dropped_unknown:
+                parts.append(f"{dropped_unknown} with no resolvable country")
+            if dropped_country:
+                where = ", ".join(f"{c}x{n}" for c, n in sorted(dropped_country.items()))
+                parts.append(f"{sum(dropped_country.values())} outside the allowed set ({where})")
+            print(f"  {instance_type}: dropped " + "; ".join(parts), file=sys.stderr)
 
         return filtered_offers
     except subprocess.CalledProcessError as e:
@@ -398,7 +508,10 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
     down_str = f"{inet_down/1000:.1f}Gb" if inet_down >= 1000 else f"{int(inet_down)}Mb"
     up_str = f"{inet_up/1000:.1f}Gb" if inet_up >= 1000 else f"{int(inet_up)}Mb"
 
-    geolocation = offer.get('geolocation', 'N/A')[:2]
+    # The country code, not the first two letters of the region name: the field
+    # reads "South Korea, KR", so the old [:2] slice displayed "So" and every
+    # US state showed as its own bogus "country" (Maryland -> "Ma").
+    geolocation = extract_country(offer) or "??"
     reliability = offer.get('reliability', 0) * 100
 
     dl_str = f"{offer.get('download_minutes', 0):.0f}m"
