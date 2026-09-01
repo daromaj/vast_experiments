@@ -116,7 +116,7 @@ ALLOWED_COUNTRIES = [
 # Cost calculation parameters
 CONTAINER_SIZE_GB = 60  # GB (matches MIN_DISK_SPACE / the --disk value used on create)
 DATA_DOWNLOAD_GB = 34  # GB - actual model payload after dropping the unused fp8 encoder
-IMAGE_PULL_GB = 9.5  # GB - vastai/comfy:v0.28.0-cuda-12.9-py312, compressed size per Docker Hub.
+IMAGE_PULL_GB = 9.7  # GB - vastai/comfy:v0.34.0-cuda-12.9-py312, compressed size per Docker Hub.
 # Pulled from Docker Hub on every fresh rental, before provisioning starts and before ssh answers.
 # It costs TIME but not MONEY: the 2026-07-27 e2e run billed bwd = 34.4 GB, i.e. the models alone,
 # so vast does not charge egress on the image pull. That is why it belongs in the time term below
@@ -187,15 +187,28 @@ EXCLUDE_GPU_NAMES = []
 # as unreliable. Pinned tag == cacheable wheel. py312 matches the cp312 wheels
 # in python/.
 #
-# Bumping this tag invalidates any harvested SageAttention wheel: the wheel is
-# keyed to the torch ABI this specific image ships. Harvest a fresh one after any
-# bump (povision_fp8.sh prints the ABI-keyed filename on a source build).
+# THE TAG IS THE COMFYUI VERSION. vastai/comfy:vX.Y.Z tracks ComfyUI release
+# X.Y.Z (v0.34.0 published 2026-08-27, one day after ComfyUI v0.34.0), and the
+# Dockerfile bakes it in from a build ARG. Nothing at runtime moves it. So this
+# constant is the ONLY thing that decides which ComfyUI a rental runs - leaving
+# it alone is not "staying stable", it is staying on an older ComfyUI forever.
+#
+# Bumping MAY invalidate a harvested SageAttention wheel, but only when the image
+# changes torch: the wheel lives in an ABI-keyed directory (python/sage/
+# torch<ver>-cu<cuda>-sm_<arch>/) and a bump that keeps the same torch keeps the
+# same key. Check before assuming a rebuild is needed - read PYTORCH_VERSION and
+# PYTORCH_BACKEND straight out of both images' registry config blobs. The
+# v0.28.0 -> v0.34.0 bump (2026-09-01) was free by that test: both ship
+# torch 2.10.0 / cu128 / py3.12, so python/sage/torch2.10.0-cu128-sm_120 still
+# matches and the wheel path still short-circuits the source build. The only
+# config difference was BACKEND=comfyui-json and EXPOSE 3000, both inert unless
+# SERVERLESS=true, which this script never sets.
 #
 # check_for_newer_image() below reports newer tags at startup, so this does not
 # have to be checked by hand.
 IMAGE_REPO = "vastai/comfy"
 IMAGE_VARIANT = "cuda-12.9-py312"  # the flavour we pin within; py312 matches the cp312 wheels
-IMAGE_VERSION = "v0.28.0"
+IMAGE_VERSION = "v0.34.0"
 IMAGE = f"{IMAGE_REPO}:{IMAGE_VERSION}-{IMAGE_VARIANT}"
 
 PROVISIONING_SCRIPT = (
@@ -233,8 +246,15 @@ def build_env_string() -> str:
     it just produces an instance that is subtly wrong.
     """
     parts = [f"-p {p}:{p}" for p in PORTS]
+    # No COMFYUI_VERSION here. It looks like it would pin/update ComfyUI and it
+    # does nothing on this path: the only reader of that variable in
+    # vast-ai/base-image is the DECLARATIVE YAML provisioner
+    # (`ref: "${COMFYUI_VERSION:-master}"`), and we provision with a shell
+    # script via PROVISIONING_SCRIPT instead. The image's baked-in ComfyUI wins
+    # regardless. It sat here as `latest` - not even a valid git ref - and read
+    # as "we track upstream" while every rental ran the tag's ComfyUI. The image
+    # tag above is the real knob.
     parts += [
-        '-e COMFYUI_VERSION=latest',
         f'-e COMFYUI_ARGS="{COMFYUI_ARGS}"',
         '-e COMFYUI_API_BASE=http://localhost:18188',
         f'-e PROVISIONING_SCRIPT={PROVISIONING_SCRIPT}',
