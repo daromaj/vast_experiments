@@ -612,7 +612,13 @@ def create_instance(offer: Dict):
            "--env", build_env_string(),
            "--onstart-cmd", "entrypoint.sh",
            "--disk", str(CONTAINER_SIZE_GB),
-           "--jupyter", "--ssh", "--direct"]
+           "--jupyter", "--ssh", "--direct",
+           # --raw makes the CLI answer {"success": true, "new_contract": <id>}.
+           # That id is the ONLY authoritative source of which instance this call
+           # created. Every alternative is a guess about someone's live account -
+           # "the highest id", "the one that appeared since the last listing" -
+           # and a wrong guess gets a running rental destroyed.
+           "--raw"]
 
     if instance_type == "bid":
         bid_price = dph + 0.01  # bid slightly above the shown price
@@ -627,12 +633,35 @@ def create_instance(offer: Dict):
     print("\n" + shlex.join(cmd) + "\n")
 
     try:
-        subprocess.run(cmd, check=True, text=True)
-        print(f"✅ Instance created successfully!")
-        return True
+        result = subprocess.run(cmd, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to create instance (exit {e.returncode}): {e}")
+        print(f"❌ Failed to create instance (exit {e.returncode}): "
+              f"{(e.stderr or '').strip() or e}")
         return False
+
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    print("✅ Instance created successfully!")
+
+    new_id = None
+    try:
+        payload = json.loads(result.stdout)
+        if payload.get("success"):
+            new_id = payload.get("new_contract")
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    if new_id is None:
+        # The box may well be billing. Say so instead of letting a caller fall
+        # back to inferring an id, which is the failure mode this exists to stop.
+        print("⚠️  The CLI did not report new_contract, so the instance id is UNKNOWN.")
+        print("⚠️  An instance may be running and billing - check `vastai show instances`.")
+        print("⚠️  Callers: no INSTANCE_ID line follows. Do not guess one.")
+    else:
+        # Machine-readable, on its own line, for scripts driving this.
+        print(f"INSTANCE_ID={new_id}")
+
+    return True
 
 
 def curses_interactive_select(offers: List[Dict]) -> Optional[int]:

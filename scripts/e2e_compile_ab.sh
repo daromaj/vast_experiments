@@ -59,6 +59,27 @@ cleanup_destroy() {
     fi
 }
 
+# Identify our instance by SET DIFFERENCE against a pre-create snapshot, never
+# by max(id). The old max(id) had no snapshot at all: it simply assumed the
+# highest-numbered instance on the account was the one this run had just made,
+# which is a guess that destroys a running rental the moment it is wrong.
+list_instance_ids() {
+    vastai show instances --raw 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(" ".join(str(i["id"]) for i in d))'
+}
+
+if ! BEFORE_IDS="$(list_instance_ids)"; then
+    say "could not read the account's instance list - refusing to create"
+    exit 1
+fi
+BEFORE=" ${BEFORE_IDS} "
+say "pre-existing instances (will not be touched): ${BEFORE_IDS:-none}"
+
 stamp create_issued
 say "renting best-ranked cheap-egress 5090"
 # Via search_cheap_egress, not agent_vastai: the latter's create re-runs the
@@ -73,24 +94,25 @@ grep -q "Instance created successfully" "$RUN_DIR/create.log" || {
 # once, from a missing instance_type defaulting to 'bid'.
 grep -q "Creating ON-DEMAND instance" "$RUN_DIR/create.log" || {
     say "created a BID instance - not acceptable for a multi-arm run"
-    INSTANCE=$(vastai show instances --raw 2>/dev/null \
-        | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: d=[]
-print(max((i["id"] for i in d), default=""))')
+    for id in $(list_instance_ids); do
+        [[ "$BEFORE" == *" $id "* ]] || INSTANCE="$id"
+    done
     cleanup_destroy
     exit 1; }
 
 for _ in $(seq 1 20); do
-    INSTANCE=$(vastai show instances --raw 2>/dev/null \
-        | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: d=[]
-print(max((i["id"] for i in d), default=""))')
+    for id in $(list_instance_ids); do
+        [[ "$BEFORE" == *" $id "* ]] || { INSTANCE="$id"; break; }
+    done
     [[ -n "$INSTANCE" ]] && break
     sleep 3
 done
 [[ -z "$INSTANCE" ]] && { say "no instance id"; exit 1; }
+if [[ "$BEFORE" == *" $INSTANCE "* ]]; then
+    INSTANCE=""
+    say "resolved an instance that existed before this run - refusing to touch it"
+    exit 1
+fi
 say "instance $INSTANCE"
 echo "$INSTANCE" > "$RUN_DIR/instance_id"
 

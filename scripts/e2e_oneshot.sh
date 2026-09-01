@@ -87,14 +87,30 @@ exec 200>"$LOCK"
 flock -x -w 900 200 || { say "timed out waiting for the create lock"; exit 1; }
 
 list_instance_ids() {
+    # Exits NON-ZERO when the listing could not be read. That is not the same as
+    # "the account has no instances", and collapsing the two to an empty string
+    # is how this could have destroyed somebody else's box: an empty BEFORE makes
+    # every pre-existing instance look new to the set difference below, so the
+    # first one in the account list gets adopted, deadmanned and destroyed.
     vastai show instances --raw 2>/dev/null \
         | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: d=[]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
 print(" ".join(str(i["id"]) for i in d))'
 }
 
-BEFORE=" $(list_instance_ids) "
+# The pre-create snapshot is a SAFETY control, not an optimisation - it is the
+# only thing that distinguishes the instance this run created from one that was
+# already running. If it cannot be taken, nothing is created.
+if ! BEFORE_IDS="$(list_instance_ids)"; then
+    say "could not read the account's instance list - refusing to create"
+    say "without it the set difference is blind and a running instance could be adopted"
+    exit 1
+fi
+BEFORE=" ${BEFORE_IDS} "
+say "pre-existing instances (will not be touched): ${BEFORE_IDS:-none}"
 stamp create_issued
 if [[ "$MACHINE_ID" == "best" ]]; then
     say "ranking and renting the best cheap-bandwidth 5090 in one step"
@@ -114,28 +130,43 @@ fi
 # A bid instance can be reclaimed mid-render, losing the rental and the clip.
 # This has already happened once, from a missing instance_type defaulting to
 # 'bid'. Only the ranked path prints this line, so only it is checked.
+# The id comes from the create call itself - `vastai create instance --raw`
+# reports new_contract, which create_instance echoes as INSTANCE_ID=<id>.
+#
+# It used to be inferred by diffing the account's instance list against a
+# pre-create snapshot. That cannot be made safe: a listing that transiently
+# returns [] while instances exist is VALID JSON, so the snapshot comes back
+# empty, every pre-existing instance then looks new to the diff, and the first
+# one on the account gets adopted, deadmanned and destroyed. Reading the id the
+# API already told us removes the inference entirely.
+INSTANCE="$(sed -n 's/^INSTANCE_ID=\([0-9]\{1,\}\)$/\1/p' "$RUN_DIR/create.log" | tail -1)"
+if [[ -z "$INSTANCE" ]]; then
+    flock -u 200
+    say "create did not report an instance id - REFUSING to guess one"
+    say "an instance may be billing: check 'vastai show instances' by hand"
+    exit 1
+fi
+# The snapshot is now a cross-check, not the mechanism. If the API hands back an
+# id that was already running, something is badly wrong - stop, do not destroy.
+if [[ "$BEFORE" == *" $INSTANCE "* ]]; then
+    reported="$INSTANCE"
+    INSTANCE=""   # keeps cleanup_destroy a no-op no matter where the trap lands
+    flock -u 200
+    say "create reported id $reported, which existed BEFORE this run - refusing to touch it"
+    exit 1
+fi
+
+# A bid instance can be reclaimed mid-render, losing the rental and the clip.
+# This has already happened once, from a missing instance_type defaulting to
+# 'bid'. Only the ranked path prints this line, so only it is checked.
 if [[ "$MACHINE_ID" == "best" ]] \
    && ! grep -q "Creating ON-DEMAND instance" "$RUN_DIR/create.log"; then
     say "created a BID instance - not acceptable for a one-shot render"
-    for id in $(list_instance_ids); do
-        [[ "$BEFORE" == *" $id "* ]] || INSTANCE="$id"
-    done
     flock -u 200
     cleanup_destroy
     exit 1
 fi
-
-# Identify by set difference against the pre-create snapshot rather than by
-# "highest id", so an instance belonging to the other arm can never be adopted.
-for _ in $(seq 1 20); do
-    for id in $(list_instance_ids); do
-        [[ "$BEFORE" == *" $id "* ]] || { INSTANCE="$id"; break; }
-    done
-    [[ -n "$INSTANCE" ]] && break
-    sleep 3
-done
 flock -u 200
-[[ -z "$INSTANCE" ]] && { say "could not resolve instance id"; exit 1; }
 say "instance $INSTANCE"
 echo "$INSTANCE" > "$RUN_DIR/instance_id"
 
