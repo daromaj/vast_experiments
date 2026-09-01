@@ -65,7 +65,24 @@ MIN_PCIE_BW = 20  # GB/s floor on measured PCIe link bandwidth. PCIe 4.0 x16 is 
 # where the box is. Pinning the country removes the SECOND, unassessed transfer
 # (to whoever owns the machine), not the first. Do not read a green result here
 # as "no paperwork needed".
-SECURE_CLOUD_ONLY = True
+#
+# WHY THIS DEFAULTS TO FALSE (measured 2026-09-01, not assumed):
+# as a hard filter it was the single biggest constraint in the whole script.
+# Leave-one-out against the live API, everything else held: the full query
+# returned 1 on-demand + 1 bid offer; dropping datacenter=true alone took that to
+# 26 + 22, and no other filter came close (dph 11+11, inet_down 6+2, and pcie /
+# inet_*_cost / geolocation removed nothing at all). The cause is pool size, not
+# price - Secure Cloud in the allowed countries with an allowlisted GPU is ~24
+# offers WORLDWIDE, and the cheap ones (Iceland $0.401, South Korea $0.402) sit at
+# 590-617 Mb/s, so the inet_down floor then eats them too. The price premium
+# itself is small: cheapest 4090 $0.401 vs $0.321 on the open marketplace.
+# So it is now a COLUMN, not a gate. Every offer is fetched and ranked; the DC
+# column says which ones are Secure Cloud and the summary line says how many of
+# each survived. The legal reasoning above has not changed - a consumer host is
+# still an unvetted sub-processor with physical access to the disk. Read the DC
+# column before renting, and flip this back to True when the run is one that
+# actually touches personal data.
+SECURE_CLOUD_ONLY = False
 
 # EEA, plus every third country with a live European Commission adequacy
 # decision. Checked against the Commission's list on 2026-08-07; the UK decision
@@ -334,6 +351,7 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
         # Filter out incompatible GPUs and add instance type
         filtered_offers = []
         dropped_hosting = 0
+        kept_consumer = 0
         dropped_country: Dict[str, int] = {}
         dropped_unknown = 0
         for offer in offers:
@@ -349,9 +367,11 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
             # query string. A server-side filter that silently stops working
             # fails OPEN - it just returns more offers, and nothing in the
             # output says the constraint was dropped.
-            if SECURE_CLOUD_ONLY and offer.get('hosting_type') != 1:
-                dropped_hosting += 1
-                continue
+            if offer.get('hosting_type') != 1:
+                if SECURE_CLOUD_ONLY:
+                    dropped_hosting += 1
+                    continue
+                kept_consumer += 1
             if ALLOWED_COUNTRIES:
                 country = extract_country(offer)
                 if country is None:
@@ -376,6 +396,12 @@ def run_vastai_search(instance_type: str) -> List[Dict]:
                 where = ", ".join(f"{c}x{n}" for c, n in sorted(dropped_country.items()))
                 parts.append(f"{sum(dropped_country.values())} outside the allowed set ({where})")
             print(f"  {instance_type}: dropped " + "; ".join(parts), file=sys.stderr)
+
+        # Not a drop, but the thing most worth knowing before spending money:
+        # how much of what survived is a stranger's machine.
+        if kept_consumer:
+            print(f"  {instance_type}: {kept_consumer} of {len(filtered_offers)} kept offers "
+                  f"are NOT Secure Cloud (see the DC column)", file=sys.stderr)
 
         return filtered_offers
     except subprocess.CalledProcessError as e:
@@ -445,6 +471,7 @@ _COLUMNS = [
     ("DLm",   4, '>'),
     ("Up",    6, '>'),
     ("Loc",   3, '<'),
+    ("DC",    2, '<'),
     ("Rel",   5, '>'),
     ("TF",    6, '>'),
 ]
@@ -512,6 +539,8 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
     # reads "South Korea, KR", so the old [:2] slice displayed "So" and every
     # US state showed as its own bogus "country" (Maryland -> "Ma").
     geolocation = extract_country(offer) or "??"
+    # Secure Cloud (hosting_type 1) vs a consumer box in someone's flat.
+    dc_str = "Y" if offer.get('hosting_type') == 1 else "-"
     reliability = offer.get('reliability', 0) * 100
 
     dl_str = f"{offer.get('download_minutes', 0):.0f}m"
@@ -528,6 +557,7 @@ def format_table_row(offer: Dict, rank: int, selected: bool = False) -> str:
         dl_str,
         up_str,
         geolocation,
+        dc_str,
         f"{reliability:.1f}",
         tflops_str,
     ]
@@ -631,12 +661,16 @@ def curses_interactive_select(offers: List[Dict]) -> Optional[int]:
             f"  inet_down     >= {MIN_INET_DOWN_SPEED} Mb/s",
             f"  inet_dn/up$   <  ${MAX_INET_COST:.4f}/GB (<=${MAX_DOWNLOAD_COST} for {DATA_DOWNLOAD_GB}GB)",
             f"  dph_total     <= ${MAX_DPH}/hr",
+            f"  Secure Cloud  : {'REQUIRED' if SECURE_CLOUD_ONLY else 'not filtered - shown in the DC column'}",
         ]:
             lines.append(fline)
         lines.append("")
         lines.append(f"Down = host inet_down (advertised). DLm = est. minutes to pull {IMAGE_PULL_GB}GB image + {DATA_DOWNLOAD_GB}GB models (the real time sink on slow hosts).")
         lines.append(f"         DLm caps out at {OBSERVED_MEDIAN_SHARE_MBPS}Mb/s achieved: over 6 runs, hosts advertising >=3000Mb/s delivered 1106-3161Mb/s with NO relation to the")
         lines.append(f"         advertised figure (the 9135Mb/s host was slowest, the 7318Mb/s host fastest), so above ~{int(OBSERVED_MEDIAN_SHARE_MBPS/SPEED_DERATE)}Mb/s advertised you are buying noise. Rank on price.")
+        lines.append("")
+        lines.append("DC = Secure Cloud (vast-operated datacenter). '-' = consumer hardware in a stranger's home:")
+        lines.append("         an unvetted sub-processor with physical access to the disk. Do not put personal data on a '-' host.")
         lines.append("")
         lines.append("Row colors: GREEN = on-demand, fixed-price. YELLOW = bid, interruptible (auto --bid_price) - can be outbid mid-render.")
         lines.append("")
