@@ -196,13 +196,23 @@ EXCLUDE_GPU_NAMES = []
 # Bumping MAY invalidate a harvested SageAttention wheel, but only when the image
 # changes torch: the wheel lives in an ABI-keyed directory (python/sage/
 # torch<ver>-cu<cuda>-sm_<arch>/) and a bump that keeps the same torch keeps the
-# same key. Check before assuming a rebuild is needed - read PYTORCH_VERSION and
-# PYTORCH_BACKEND straight out of both images' registry config blobs. The
-# v0.28.0 -> v0.34.0 bump (2026-09-01) was free by that test: both ship
-# torch 2.10.0 / cu128 / py3.12, so python/sage/torch2.10.0-cu128-sm_120 still
-# matches and the wheel path still short-circuits the source build. The only
-# config difference was BACKEND=comfyui-json and EXPOSE 3000, both inert unless
-# SERVERLESS=true, which this script never sets.
+# same key. Read PYTORCH_VERSION and PYTORCH_BACKEND out of both images' registry
+# config blobs before assuming a rebuild is needed. The v0.28.0 -> v0.34.0 bump
+# (2026-09-01) was free by that test - both ship torch 2.10.0 / cu128 / py3.12,
+# the wheel matched, and SAGE came up READY on the first rental.
+#
+# TORCH IS NOT THE ONLY THING AN IMAGE PINS FOR YOU. That same bump broke the
+# lip-sync run anyway: ComfyUI asks for `transformers>=4.50.3`, so each image
+# bakes whatever was newest on its build date, and v0.34.0 (2026-08-27) picked up
+# transformers 5.16.0 - released one day earlier - which removed
+# output_hidden_states from Wav2Vec2Encoder.forward and broke
+# ComfyUI-WanVideoWrapper's multitalk audio embeddings. povision_fp8.sh now pins
+# transformers explicitly (TRANSFORMERS_PIN) and asserts the signature it needs.
+# Before the NEXT bump, diff more than torch: every pinless dependency in the
+# image moves with the build date, and the failure lands in a node, not the image.
+#
+# The only config-blob difference between the two tags was BACKEND=comfyui-json
+# and EXPOSE 3000, both inert unless SERVERLESS=true, which this script never sets.
 #
 # check_for_newer_image() below reports newer tags at startup, so this does not
 # have to be checked by hand.

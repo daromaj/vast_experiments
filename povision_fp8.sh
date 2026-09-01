@@ -57,6 +57,33 @@ PIP_PACKAGES=(
     # hf_transfer (Rust multi-threaded downloader) + the `hf` CLI for HuggingFace pulls.
     "huggingface_hub[hf_transfer]"
 )
+
+# transformers is PINNED, and this one is not cosmetic - an unpinned transformers
+# is a broken lip-sync run on a box you are paying for.
+#
+# transformers 5.16.0 (2026-08-26) refactored Wav2Vec2Encoder.forward from
+#     (hidden_states, attention_mask, output_attentions=False,
+#      output_hidden_states=False, return_dict=True)
+# to
+#     (hidden_states, attention_mask, **kwargs: Unpack[TransformersKwargs])
+# and deleted every all_hidden_states collection inside it. In v5 that work moved
+# to a decorator on the TOP-LEVEL model's forward - and ComfyUI-WanVideoWrapper
+# subclasses Wav2Vec2Model and OVERRIDES forward (multitalk/wav2vec2.py), so the
+# decorator never runs. Its `self.encoder(..., output_hidden_states=True)` is now
+# swallowed by **kwargs, silently, and `encoder_outputs.hidden_states` comes back
+# None. The failure surfaces one frame later in multitalk/nodes.py:248 as
+#     TypeError: 'NoneType' object is not subscriptable
+# on `torch.stack(embeddings.hidden_states[1:], dim=1)` - nowhere near the cause.
+#
+# 5.15.1 (2026-08-19) is the last release whose encoder still takes the argument;
+# verified by reading the signature out of the v5.15.0/v5.14.1/v5.16.1 sources.
+#
+# HOW IT GOT IN: ComfyUI's requirements say `transformers>=4.50.3`, so each
+# vastai/comfy image bakes whatever was newest on ITS build date. v0.28.0 (built
+# 2026-07-16) got <=5.14.1 and worked; v0.34.0 (built 2026-08-27) got 5.16.x,
+# one day after it shipped. Checking torch across an image bump is not enough -
+# every other pinless dependency moves too.
+TRANSFORMERS_PIN="transformers==5.15.1"
 # Custom nodes are cloned at HEAD, so every rental can get a different version.
 # That has already bitten us twice: the wrapper deleted DownloadAndLoadWav2VecModel
 # (see the WAV2VEC_MODELS note below), and it is the same class of drift as the
@@ -258,6 +285,12 @@ function provisioning_start() {
     local nodes_status=$?
     phase "nodes install finished (status=${nodes_status})"
 
+    # Same reasoning as waiting for the nodes before judging the SageAttention
+    # wheel: node requirements.txt files are installed with no constraint file,
+    # and peft/diffusers depend on transformers, so anything pinned earlier can
+    # be pulled back up here. The pin has to be asserted AFTER they are done.
+    provisioning_pin_transformers
+
     # Race the prebuilt wheel against the still-running source build. The build was
     # going to happen anyway, so trying the wheel costs ~30s and, when it works,
     # removes the ~6min build from the critical path. Worst case we lose those 30s.
@@ -304,6 +337,30 @@ function provisioning_start() {
     kill $MONITOR_PID 2>/dev/null
 
     provisioning_print_end "$provisioning_start_time"
+}
+
+function provisioning_pin_transformers() {
+    # Install the pin, then CHECK THE THING THAT ACTUALLY MATTERS. A version
+    # number is a proxy; the signature is the contract WanVideoWrapper relies on,
+    # and it is what silently changed. If the check fails, say so loudly here
+    # rather than letting the run die 30 minutes later inside a sampler.
+    phase "pinning ${TRANSFORMERS_PIN}"
+    if ! pip install --no-cache-dir "$TRANSFORMERS_PIN" 2>&1 | sed 's/^/[TRANSFORMERS] /'; then
+        echo "[TRANSFORMERS] WARNING: pin failed to install."
+    fi
+
+    python3 - <<'PYCHECK' 2>&1 | sed 's/^/[TRANSFORMERS] /'
+import inspect
+import transformers
+from transformers.models.wav2vec2.modeling_wav2vec2 import Wav2Vec2Encoder
+params = inspect.signature(Wav2Vec2Encoder.forward).parameters
+ok = "output_hidden_states" in params
+print(f"version={transformers.__version__} "
+      f"Wav2Vec2Encoder.forward accepts output_hidden_states: {ok}")
+if not ok:
+    print("FAIL: WanVideoWrapper's MultiTalkWav2VecEmbeds will raise")
+    print("FAIL: TypeError: 'NoneType' object is not subscriptable at multitalk/nodes.py")
+PYCHECK
 }
 
 function provisioning_apply_wanvideo_patch() {
