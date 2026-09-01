@@ -48,9 +48,9 @@ NODE_PIN="${NODE_PIN:-}"
 REMOTE_WORKFLOW="/workspace/$(basename "$WORKFLOW")"
 # Generous: a cold-cache 58 s render has never been timed, so the ceiling is a
 # runaway guard, not an expectation.
-RUN_TIMEOUT=3600
+RUN_TIMEOUT="${RUN_TIMEOUT:-3600}"
 # Hard cap on the whole rental. The deadman destroys the box if this script dies.
-DEADLINE_S=5400
+DEADLINE_S="${DEADLINE_S:-5400}"
 
 INSTANCE=""
 SSH_HOST=""
@@ -330,13 +330,13 @@ scp $(scp_opts) -q scripts/run_july_tests.py "root@${SSH_HOST}:/workspace/script
 stamp uploaded
 
 # ---------------------------------------------------------------- render
-say "rendering 58 s clip (cold inductor cache)"
+say "rendering $(basename "$WORKFLOW" .json) (cold inductor cache)"
 rsh 'nohup bash -c "while true; do nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits; sleep 5; done" >/workspace/vram.log 2>&1 & echo started' 60 >/dev/null
 
 rsh "/usr/bin/python3 /workspace/scripts/run_july_tests.py \
         --workflows ${REMOTE_WORKFLOW} \
         --runs 1 --run-timeout $RUN_TIMEOUT \
-        --out /workspace/results/e2e_full58.json 2>&1" $((RUN_TIMEOUT + 300)) \
+        --out /workspace/results/e2e_$(basename "$WORKFLOW" .json).json 2>&1" $((RUN_TIMEOUT + 300)) \
     | tee "$RUN_DIR/render.log"
 stamp rendered
 

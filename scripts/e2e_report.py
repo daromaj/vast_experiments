@@ -18,7 +18,7 @@ SPANS = [
     ("create_issued", "ssh_up", "create -> ssh reachable"),
     ("ssh_up", "comfy_up", "provisioning (models, nodes, sage)"),
     ("comfy_up", "uploaded", "upload workflow + assets"),
-    ("uploaded", "rendered", "render 58 s clip (cold cache)"),
+    ("uploaded", "rendered", "render (cold cache)"),
     ("rendered", "downloaded", "download outputs"),
     ("downloaded", "destroyed", "destroy"),
 ]
