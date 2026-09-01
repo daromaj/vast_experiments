@@ -783,24 +783,46 @@ function provisioning_get_nodes() {
         path="${COMFYUI_DIR}/custom_nodes/${dir}"
         requirements="${path}/requirements.txt"
         pin="${NODE_PINS[$dir]:-}"
+        local changed=0
         if [[ -d $path ]]; then
             if [[ ${AUTO_UPDATE,,} != "false" && -z $pin ]]; then
                 echo "Updating node: ${repo}"
-                ( cd "$path" && git pull )
-                install_requirements "$requirements"
+                ( cd "$path" && git pull ) && changed=1
             fi
         else
             echo "Downloading node: ${repo}"
-            git clone "${repo}" "${path}" --recursive
-            install_requirements "$requirements"
+            if git clone "${repo}" "${path}" --recursive; then
+                changed=1
+            else
+                echo "WARNING: clone failed for ${repo} - node will be missing"
+            fi
         fi
+
         # A pinned node must land on that exact commit whether it was just
-        # cloned or already present from a previous run.
+        # cloned or already present from a previous run - and it must get there
+        # BEFORE its requirements are read. This used to run after
+        # install_requirements, which installed the dependencies of HEAD and then
+        # rolled the CODE back to the pin: a pinned rental ran January's node
+        # against September's packages. That is not the reproducibility the pin
+        # exists to provide, and it fails in the direction that looks fine.
         if [[ -n $pin ]]; then
             echo "Pinning ${dir} to ${pin}"
-            ( cd "$path" && git fetch --depth 50 origin "$pin" 2>/dev/null || git fetch origin
-              git checkout -f "$pin" ) || echo "WARNING: could not pin ${dir} to ${pin}"
+            if ( cd "$path" \
+                 && { git fetch --depth 50 origin "$pin" 2>/dev/null || git fetch origin; } \
+                 && git checkout -f "$pin" \
+                 && git submodule update --init --recursive ); then
+                changed=1
+            else
+                echo "WARNING: could not pin ${dir} to ${pin} - it is on" \
+                     "$( cd "$path" && git rev-parse --short HEAD 2>/dev/null || echo unknown )"
+            fi
         fi
+
+        # Read requirements.txt from whatever commit is checked out NOW. Also
+        # covers the case the old ordering skipped entirely: an already-present
+        # directory with a pin installed no requirements at all, because the only
+        # install_requirements call sat behind `-z $pin`.
+        (( changed )) && install_requirements "$requirements"
     done
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
