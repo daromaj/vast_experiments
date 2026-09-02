@@ -12,6 +12,7 @@ output/
 
 # Large inputs kept out of the repo
 input_files/
+input/
 
 # Cloned or built at provision time, never committed
 InfiniteTalk/
