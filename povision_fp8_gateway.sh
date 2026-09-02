@@ -518,8 +518,14 @@ function provisioning_apply_wanvideo_patch() {
         return 0
     fi
 
-    if ! python3 "$patcher" 2>&1 | sed 's/^/[WANOPT] /'; then
-        echo "[WANOPT] patch did not apply — continuing unpatched"
+    # Same trap as provisioning_pin_transformers: `if ! python3 ... | sed ...` tests SED's
+    # exit status, so the failure branch below was unreachable and a failed patch read as a
+    # successful one — logging the optimisation as applied and then setting WANOPT_* in the
+    # supervisor environment for a patch that never landed.
+    python3 "$patcher" 2>&1 | sed 's/^/[WANOPT] /'
+    local patch_status=${PIPESTATUS[0]}
+    if [[ $patch_status -ne 0 ]]; then
+        echo "[WANOPT] patch did not apply (status=${patch_status}) — continuing unpatched"
         return 0
     fi
 
