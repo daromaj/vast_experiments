@@ -13,10 +13,12 @@
 #      tensor slices are walked. aria2 truncation leaves files that *look* present (right
 #      name, non-zero size) but are unreadable — the gateway's SSH poll for readiness MUST
 #      NOT trust file presence alone. On full success (integrity pass AND the SageAttention
-#      build AND the custom-node install all succeeded) we touch
+#      build AND the custom-node install AND the transformers pin all succeeded) we touch
 #      /workspace/PROVISIONING_COMPLETE; on ANY failure we touch /workspace/PROVISIONING_FAILED.
-#      (Gating on node/SageAttention status too is stricter than the literal ask — a green
-#      integrity pass on models is meaningless if ComfyUI can't load the workflow's nodes.)
+#      (Gating on node/SageAttention/transformers status too is stricter than the literal
+#      ask — a green integrity pass on models is meaningless if ComfyUI can't load the
+#      workflow's nodes, or if transformers no longer exposes the signature the multitalk
+#      nodes call through. Both produce a box that is READY and cannot render.)
 #   2. The 4 custom-node clones are pinned to explicit commits (see NODE_COMMITS below)
 #      instead of tracking each repo's moving default branch — a floating `git clone` of
 #      someone else's branch is a supply-chain hole on a box that also holds the HF token.
@@ -47,7 +49,7 @@
 #      the headroom a 32 GB 5090 has (measured 2026-07-26/27, vast_experiments/README.md:
 #      81.7s -> 72.3s on a 5090 8s clip). Explicitly NON-FATAL: a failed/unavailable patch logs
 #      and continues unpatched, and must never cause PROVISIONING_FAILED — this fork's fatal
-#      gate stays limited to downloads+integrity+nodes+SageAttention (delta 1).
+#      gate stays limited to downloads+integrity+nodes+SageAttention+transformers (delta 1).
 #   7. provisioning_report_disk — `du`-based actual disk consumption per directory + a
 #      [DISK_DATA] JSON line, because `df` on Vast reports the host's 3.6 TB overlay, not the
 #      rented --disk quota, and is useless for sizing the next rental.
@@ -77,7 +79,10 @@
 # Re-synced to upstream as of 2026-09-01 (upstream b5c88fd / 4bfd9dd):
 #   10. TRANSFORMERS_PIN — transformers 5.16.0 (2026-08-26) broke ComfyUI-WanVideoWrapper's
 #       multitalk audio embeddings (see the comment above TRANSFORMERS_PIN below). Ported
-#       unchanged: provisioning_pin_transformers, called after nodes install like upstream.
+#       with one delta: provisioning_pin_transformers is called after nodes install like
+#       upstream, but here it RETURNS a status and that status is fatal for the readiness
+#       gate (2026-09-02). Upstream only warns, which is defensible when nothing reads a
+#       sentinel; here a warned-past pin means a READY box that cannot render.
 #       4bfd9dd's provisioning_get_nodes reordering fix does NOT apply here: this fork's
 #       version (delta 2, NODE_COMMITS-indexed) already pins each node to its SHA and calls
 #       install_requirements unconditionally afterward — it never had the pin-after-install
@@ -102,7 +107,8 @@
 #    JSON Schema: {"downloaded_bytes": int, "total_bytes": int, "percentage": int, "speed_bps": int, "eta_seconds": int, "elapsed_seconds": int}
 #
 # Readiness sentinels (Task 1.5a, gateway polls these over SSH — §2.5, §9):
-#   /workspace/PROVISIONING_COMPLETE  — written iff downloads + integrity + nodes + SageAttention all succeeded
+#   /workspace/PROVISIONING_COMPLETE  — written iff downloads + integrity + nodes + SageAttention
+#                                       + the transformers pin all succeeded
 #   /workspace/PROVISIONING_FAILED    — written on any failure above; gateway must not treat the box as READY
 #
 
@@ -351,6 +357,8 @@ function provisioning_start() {
     # and peft/diffusers depend on transformers, so anything pinned earlier can
     # be pulled back up here. The pin has to be asserted AFTER they are done.
     provisioning_pin_transformers
+    local transformers_status=$?
+    phase "transformers pin check finished (status=${transformers_status})"
 
     # Race the prebuilt, ABI-matched wheel against the still-running source build. The build
     # was going to happen anyway, so trying the wheel costs ~30s and, when it works, removes the
@@ -387,6 +395,10 @@ function provisioning_start() {
         echo "WARNING: Node installation reported failure (status=${nodes_status})"
     fi
 
+    if [[ $transformers_status -ne 0 ]]; then
+        echo "WARNING: transformers pin did not take (status=${transformers_status}) — FATAL for readiness"
+    fi
+
     if [[ $sage_status -eq 0 ]]; then
         phase "SAGE: READY"
     else
@@ -413,12 +425,13 @@ function provisioning_start() {
     provisioning_verify_model_integrity
     integrity_status=$?
 
-    if [[ $sage_status -eq 0 && $nodes_status -eq 0 && $integrity_status -eq 0 ]]; then
+    if [[ $sage_status -eq 0 && $nodes_status -eq 0 && $integrity_status -eq 0 \
+          && $transformers_status -eq 0 ]]; then
         touch "/workspace/PROVISIONING_COMPLETE"
-        echo "[$(date)] All checks passed (sage=$sage_status nodes=$nodes_status integrity=$integrity_status) — wrote /workspace/PROVISIONING_COMPLETE"
+        echo "[$(date)] All checks passed (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status) — wrote /workspace/PROVISIONING_COMPLETE"
     else
         touch "/workspace/PROVISIONING_FAILED"
-        echo "[$(date)] FAILURE (sage=$sage_status nodes=$nodes_status integrity=$integrity_status) — wrote /workspace/PROVISIONING_FAILED"
+        echo "[$(date)] FAILURE (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status) — wrote /workspace/PROVISIONING_FAILED"
     fi
 
     provisioning_print_end "$provisioning_start_time"
@@ -429,15 +442,39 @@ function provisioning_pin_transformers() {
     # number is a proxy; the signature is the contract WanVideoWrapper relies on,
     # and it is what silently changed. If the check fails, say so loudly here
     # rather than letting the run die 30 minutes later inside a sampler.
+    #
+    # RETURNS non-zero when the contract is missing. Until 2026-09-02 this only
+    # printed "FAIL:" and returned success, so a box whose pin had been defeated
+    # still wrote PROVISIONING_COMPLETE, still reported READY, and still billed a
+    # render that could not produce anything — the very failure the pin exists to
+    # prevent, just found later and more expensively. The fork's readiness gate
+    # consumes this status; the upstream original writes no sentinel, so there it
+    # is deliberately unused.
     phase "pinning ${TRANSFORMERS_PIN}"
-    if ! pip install --no-cache-dir "$TRANSFORMERS_PIN" 2>&1 | sed 's/^/[TRANSFORMERS] /'; then
-        echo "[TRANSFORMERS] WARNING: pin failed to install."
+
+    # NOT `if ! pip install ... | sed ...`. A pipeline's status is the LAST command's,
+    # so that form reports sed's success and a failed pip install reads as fine.
+    pip install --no-cache-dir "$TRANSFORMERS_PIN" 2>&1 | sed 's/^/[TRANSFORMERS] /'
+    local pip_status=${PIPESTATUS[0]}
+    if [[ $pip_status -ne 0 ]]; then
+        echo "[TRANSFORMERS] WARNING: pin failed to install (status=${pip_status})"
     fi
 
+    # The signature decides, not pip's exit code. If pip failed but whatever is
+    # installed still carries the contract, the box is fine; if pip succeeded and the
+    # contract is absent, it is not. Only this check can tell those apart, which is
+    # why pip's status above is logged rather than returned.
     python3 - <<'PYCHECK' 2>&1 | sed 's/^/[TRANSFORMERS] /'
 import inspect
-import transformers
-from transformers.models.wav2vec2.modeling_wav2vec2 import Wav2Vec2Encoder
+import sys
+
+try:
+    import transformers
+    from transformers.models.wav2vec2.modeling_wav2vec2 import Wav2Vec2Encoder
+except Exception as exc:  # missing, or half-installed by a failed pip
+    print(f"FAIL: cannot import transformers Wav2Vec2Encoder: {exc!r}")
+    sys.exit(1)
+
 params = inspect.signature(Wav2Vec2Encoder.forward).parameters
 ok = "output_hidden_states" in params
 print(f"version={transformers.__version__} "
@@ -445,7 +482,13 @@ print(f"version={transformers.__version__} "
 if not ok:
     print("FAIL: WanVideoWrapper's MultiTalkWav2VecEmbeds will raise")
     print("FAIL: TypeError: 'NoneType' object is not subscriptable at multitalk/nodes.py")
+    sys.exit(1)
 PYCHECK
+    local check_status=${PIPESTATUS[0]}
+    if [[ $check_status -ne 0 ]]; then
+        echo "[TRANSFORMERS] FATAL: the pin did not take — this box cannot render."
+    fi
+    return $check_status
 }
 
 function provisioning_apply_wanvideo_patch() {

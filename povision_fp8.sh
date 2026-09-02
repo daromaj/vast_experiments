@@ -344,15 +344,39 @@ function provisioning_pin_transformers() {
     # number is a proxy; the signature is the contract WanVideoWrapper relies on,
     # and it is what silently changed. If the check fails, say so loudly here
     # rather than letting the run die 30 minutes later inside a sampler.
+    #
+    # RETURNS non-zero when the contract is missing. Until 2026-09-02 this only
+    # printed "FAIL:" and returned success, so a box whose pin had been defeated
+    # still wrote PROVISIONING_COMPLETE, still reported READY, and still billed a
+    # render that could not produce anything — the very failure the pin exists to
+    # prevent, just found later and more expensively. The fork's readiness gate
+    # consumes this status; the upstream original writes no sentinel, so there it
+    # is deliberately unused.
     phase "pinning ${TRANSFORMERS_PIN}"
-    if ! pip install --no-cache-dir "$TRANSFORMERS_PIN" 2>&1 | sed 's/^/[TRANSFORMERS] /'; then
-        echo "[TRANSFORMERS] WARNING: pin failed to install."
+
+    # NOT `if ! pip install ... | sed ...`. A pipeline's status is the LAST command's,
+    # so that form reports sed's success and a failed pip install reads as fine.
+    pip install --no-cache-dir "$TRANSFORMERS_PIN" 2>&1 | sed 's/^/[TRANSFORMERS] /'
+    local pip_status=${PIPESTATUS[0]}
+    if [[ $pip_status -ne 0 ]]; then
+        echo "[TRANSFORMERS] WARNING: pin failed to install (status=${pip_status})"
     fi
 
+    # The signature decides, not pip's exit code. If pip failed but whatever is
+    # installed still carries the contract, the box is fine; if pip succeeded and the
+    # contract is absent, it is not. Only this check can tell those apart, which is
+    # why pip's status above is logged rather than returned.
     python3 - <<'PYCHECK' 2>&1 | sed 's/^/[TRANSFORMERS] /'
 import inspect
-import transformers
-from transformers.models.wav2vec2.modeling_wav2vec2 import Wav2Vec2Encoder
+import sys
+
+try:
+    import transformers
+    from transformers.models.wav2vec2.modeling_wav2vec2 import Wav2Vec2Encoder
+except Exception as exc:  # missing, or half-installed by a failed pip
+    print(f"FAIL: cannot import transformers Wav2Vec2Encoder: {exc!r}")
+    sys.exit(1)
+
 params = inspect.signature(Wav2Vec2Encoder.forward).parameters
 ok = "output_hidden_states" in params
 print(f"version={transformers.__version__} "
@@ -360,7 +384,13 @@ print(f"version={transformers.__version__} "
 if not ok:
     print("FAIL: WanVideoWrapper's MultiTalkWav2VecEmbeds will raise")
     print("FAIL: TypeError: 'NoneType' object is not subscriptable at multitalk/nodes.py")
+    sys.exit(1)
 PYCHECK
+    local check_status=${PIPESTATUS[0]}
+    if [[ $check_status -ne 0 ]]; then
+        echo "[TRANSFORMERS] FATAL: the pin did not take — this box cannot render."
+    fi
+    return $check_status
 }
 
 function provisioning_apply_wanvideo_patch() {
