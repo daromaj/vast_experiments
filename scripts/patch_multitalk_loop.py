@@ -34,11 +34,38 @@ R6 - mm.soft_empty_cache() + gc.collect() run every window. empty_cache()
   first thing to put back if a config raises peak memory.
 """
 import argparse
+import glob
 import os
 import shutil
 
-TARGET = ("/workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper.git"
-          "/multitalk/multitalk_loop.py")
+CUSTOM_NODES = "/workspace/ComfyUI/custom_nodes"
+RELATIVE_TARGET = "multitalk/multitalk_loop.py"
+
+
+def default_target():
+    """Find multitalk_loop.py wherever the provisioning script cloned the wrapper.
+
+    This used to be a hardcoded `ComfyUI-WanVideoWrapper.git/...`, which is a
+    directory name this file does not own: it is whatever the provisioning
+    script's clone step produced. povision_fp8_gateway.sh then *fixed* the
+    upstream quirk of cloning a `.git`-suffixed directory (its header, item 4),
+    and this path went stale in the same commit — silently, because a missing
+    target only ever produced `patch did not apply (status=1) - continuing
+    unpatched`, one line in a log that still ends with `All checks passed`.
+    Measured cost: every render from the 2026-07-27 fork to 2026-09-11 ran
+    without R3/R6, ~9s per 8s clip, while the flags claimed otherwise.
+
+    So: resolve it, accept either spelling, and require that the file actually
+    be there rather than trusting a name.
+    """
+    candidates = sorted(glob.glob(os.path.join(CUSTOM_NODES, "ComfyUI-WanVideoWrapper*")))
+    for node_dir in candidates:
+        candidate = os.path.join(node_dir, RELATIVE_TARGET)
+        if os.path.exists(candidate):
+            return candidate
+    # No match: hand back the conventional path so the error names something
+    # concrete, and let main() report what it searched.
+    return os.path.join(CUSTOM_NODES, "ComfyUI-WanVideoWrapper", RELATIVE_TARGET)
 
 # --- R3 -----------------------------------------------------------------
 Y_OLD = """            # encode
@@ -101,10 +128,21 @@ PATCHES = [("R3 y-encode cache", Y_OLD, Y_NEW),
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--target", default=TARGET)
+    ap.add_argument("--target", default=None)
     ap.add_argument("--restore", action="store_true",
                     help="put the .orig backup back and exit")
     args = ap.parse_args()
+    if args.target is None:
+        args.target = default_target()
+
+    if not args.restore and not os.path.exists(args.target):
+        # Say what is actually on disk. "FileNotFoundError" on a path nobody
+        # chose deliberately is how this went unnoticed for six weeks.
+        found = sorted(glob.glob(os.path.join(CUSTOM_NODES, "ComfyUI-WanVideoWrapper*"))) or ["(none)"]
+        print(f"FATAL: no {RELATIVE_TARGET} under {CUSTOM_NODES}/ComfyUI-WanVideoWrapper*")
+        print(f"       looked at: {', '.join(found)}")
+        print(f"       resolved target was: {args.target}")
+        return 1
 
     backup = args.target + ".orig"
 

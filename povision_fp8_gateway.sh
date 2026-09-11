@@ -428,10 +428,10 @@ function provisioning_start() {
     if [[ $sage_status -eq 0 && $nodes_status -eq 0 && $integrity_status -eq 0 \
           && $transformers_status -eq 0 ]]; then
         touch "/workspace/PROVISIONING_COMPLETE"
-        echo "[$(date)] All checks passed (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status) — wrote /workspace/PROVISIONING_COMPLETE"
+        echo "[$(date)] All checks passed (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status wanopt=${WANOPT_STATUS:-unknown}) — wrote /workspace/PROVISIONING_COMPLETE"
     else
         touch "/workspace/PROVISIONING_FAILED"
-        echo "[$(date)] FAILURE (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status) — wrote /workspace/PROVISIONING_FAILED"
+        echo "[$(date)] FAILURE (sage=$sage_status nodes=$nodes_status integrity=$integrity_status transformers=$transformers_status wanopt=${WANOPT_STATUS:-unknown}) — wrote /workspace/PROVISIONING_FAILED"
     fi
 
     provisioning_print_end "$provisioning_start_time"
@@ -509,11 +509,20 @@ function provisioning_apply_wanvideo_patch() {
     # time and NOT commit-pinned — see the supply-chain note in the header comment.
     phase "WANOPT: patching WanVideoWrapper multitalk loop"
 
+    # Recorded so the completion summary can SAY what happened. WANOPT is non-fatal by design
+    # and must never flip the readiness gate — but "non-fatal" had quietly come to mean
+    # "invisible": from the 2026-07-27 fork to 2026-09-11 the patcher never once found its
+    # target (it still pointed at the pre-fork `...-WanVideoWrapper.git` directory name), and
+    # every provision in between ended with "All checks passed" while the optimisation the log
+    # claimed was available had never applied. A summary that cannot be wrong is not a summary.
+    WANOPT_STATUS="unknown"
+
     local patch_url="https://raw.githubusercontent.com/daromaj/vast_experiments/refs/heads/master/scripts/patch_multitalk_loop.py"
     provisioning_download "$patch_url" "$WORKSPACE"
     local patcher="${WORKSPACE}/patch_multitalk_loop.py"
 
     if [[ ! -f $patcher ]]; then
+        WANOPT_STATUS="skipped:patcher-unavailable"
         echo "[WANOPT] patcher unavailable — skipping (not fatal)"
         return 0
     fi
@@ -525,6 +534,7 @@ function provisioning_apply_wanvideo_patch() {
     python3 "$patcher" 2>&1 | sed 's/^/[WANOPT] /'
     local patch_status=${PIPESTATUS[0]}
     if [[ $patch_status -ne 0 ]]; then
+        WANOPT_STATUS="failed:${patch_status}"
         echo "[WANOPT] patch did not apply (status=${patch_status}) — continuing unpatched"
         return 0
     fi
@@ -555,6 +565,7 @@ function provisioning_apply_wanvideo_patch() {
         echo "[WANOPT] flags enabled: $(grep '^environment=' "$conf")"
     fi
 
+    WANOPT_STATUS="applied"
     phase "WANOPT: done"
 }
 
